@@ -1,0 +1,11 @@
+# Ne jamais copier dans l'image : dépendances de l'hôte (binaires macOS),
+# secrets, artefacts et tests.
+node_modules
+dist
+coverage
+tests
+.env
+.env.*
+!.env.example
+*.log
+docker-compose*.yml

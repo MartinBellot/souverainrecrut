@@ -1,5 +1,14 @@
 import app from "./app";
-import { env } from "./config/env";
+import { env, getMissingRequiredEnv } from "./config/env";
+
+const missingEnv = getMissingRequiredEnv();
+
+if (missingEnv.length > 0) {
+  console.error(
+    `❌ Variables d'environnement manquantes : ${missingEnv.join(", ")}`
+  );
+  process.exit(1);
+}
 
 app.listen(env.port, () => {
   console.log("=================================");

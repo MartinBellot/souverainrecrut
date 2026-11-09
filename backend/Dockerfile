@@ -1,6 +1,8 @@
 # Étape 1 : Construction
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
+# OpenSSL est requis par le moteur Prisma sur Alpine
+RUN apk add --no-cache openssl
 COPY package*.json ./
 RUN npm ci
 COPY . .
@@ -8,12 +10,13 @@ RUN npx prisma generate
 RUN npm run build
 
 # Étape 2 : Production
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+RUN apk add --no-cache openssl
 
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 # Copie des fichiers nécessaires depuis le builder
 COPY --from=builder /app/dist ./dist

@@ -15,3 +15,15 @@ export const env = {
 
   frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173"
 };
+
+/**
+ * Variables obligatoires au démarrage du serveur.
+ * Sans JWT_SECRET, aucun token ne peut être signé ni vérifié.
+ */
+export const getMissingRequiredEnv = (): string[] =>
+  Object.entries({
+    DATABASE_URL: env.databaseUrl,
+    JWT_SECRET: env.jwtSecret,
+  })
+    .filter(([, value]) => !value)
+    .map(([name]) => name);

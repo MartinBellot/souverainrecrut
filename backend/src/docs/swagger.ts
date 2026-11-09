@@ -1,5 +1,7 @@
 import swaggerJsdoc from "swagger-jsdoc";
 
+import { env } from "../config/env";
+
 import { authDocs } from "./auth.docs";
 import { candidateDocs } from "./candidate.docs";
 import { jobDocs } from "./job.docs";
@@ -27,8 +29,9 @@ const options: swaggerJsdoc.Options = {
 
     servers: [
       {
-        url: "http://localhost:4500/v1",
-        description: "Serveur de développement",
+        // URL relative : fonctionne quel que soit l'hôte / le port.
+        url: `/${env.apiVersion}`,
+        description: "Serveur courant",
       },
     ],
 

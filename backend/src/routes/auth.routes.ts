@@ -3,6 +3,9 @@ import { Router } from "express";
 import { authController } from "../controllers/auth.controller";
 
 import { authMiddleware } from "../middlewares/auth.middleware";
+import { validate } from "../middlewares/validate.middleware";
+
+import { loginSchema } from "../validators/auth.schema";
 
 const router = Router();
 
@@ -13,7 +16,11 @@ const router = Router();
  */
 
 // Connexion
-router.post("/login", authController.login);
+router.post(
+  "/login",
+  validate(loginSchema),
+  authController.login
+);
 
 // Profil de l'utilisateur connecté
 router.get(

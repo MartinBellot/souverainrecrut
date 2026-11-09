@@ -18,6 +18,16 @@ export interface PaginationMeta {
 }
 
 /**
+ * Convertit un paramètre de requête en entier,
+ * avec une valeur par défaut s'il est absent ou non numérique.
+ */
+function toInteger(value: string | undefined, fallback: number): number {
+  const parsed = parseInt(value ?? "", 10);
+
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
+
+/**
  * Calcule les paramètres de pagination
  * à partir des paramètres de requête.
  */
@@ -25,10 +35,10 @@ export function getPagination(
   page?: string,
   limit?: string
 ): PaginationOptions {
-  const currentPage = Math.max(parseInt(page || "1", 10), 1);
+  const currentPage = Math.max(toInteger(page, 1), 1);
 
   const currentLimit = Math.min(
-    Math.max(parseInt(limit || "10", 10), 1),
+    Math.max(toInteger(limit, 10), 1),
     100
   );
 
