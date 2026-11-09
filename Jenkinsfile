@@ -126,10 +126,12 @@ pipeline {
 
     stage('Build image') {
       steps {
+        // BuildKit (buildx) : construction pour l'architecture du serveur, puis
+        // chargement dans le démon local (--load) pour le scan Trivy.
         // retry : absorbe les erreurs réseau passagères vers le registre
         retry(2) {
           sh """
-            docker build --pull --platform ${params.TARGET_PLATFORM} \
+            docker buildx build --pull --load --platform ${params.TARGET_PLATFORM} \
               --build-arg VERSION=${env.APP_VERSION} \
               --build-arg REVISION=${env.GIT_COMMIT_FULL} \
               -t ${env.IMAGE_TAG} backend

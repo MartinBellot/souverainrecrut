@@ -1,6 +1,6 @@
 # ======================================================
 # Image Jenkins de la CI SouverainRecrut
-#   Jenkins LTS + plugins + Node.js 22 + CLI Docker + Trivy
+#   Jenkins LTS + plugins + Node.js 22 + CLI Docker (buildx) + Trivy
 #   Configuration entièrement "as code" (JCasC, cf. casc.yaml).
 # ======================================================
 FROM jenkins/jenkins:lts-jdk21
@@ -27,6 +27,20 @@ RUN case "${TARGETARCH}" in arm64) a=aarch64 ;; *) a=x86_64 ;; esac \
  && curl -fsSL "https://download.docker.com/linux/static/stable/${a}/docker-${DOCKER_CLI_VERSION}.tgz" \
     | tar -xz -C /usr/local/bin --strip-components=1 docker/docker \
  && docker --version
+
+# Plugin buildx (BuildKit) : nécessaire pour construire une image d'une autre
+# architecture (linux/amd64 pour le VPS) depuis un hôte arm64. Binaire vérifié par SHA-256.
+ARG BUILDX_VERSION=0.38.1
+RUN case "${TARGETARCH}" in arm64) a=arm64 ;; *) a=amd64 ;; esac \
+ && base="https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}" \
+ && file="buildx-v${BUILDX_VERSION}.linux-${a}" \
+ && mkdir -p /usr/local/lib/docker/cli-plugins \
+ && cd /tmp \
+ && curl -fsSLO "${base}/${file}" \
+ && curl -fsSL "${base}/checksums.txt" | grep " \*\?${file}$" | sed 's/ \*/  /' | sha256sum -c - \
+ && install -m 0755 "${file}" /usr/local/lib/docker/cli-plugins/docker-buildx \
+ && rm -f "${file}" \
+ && docker buildx version
 
 # Trivy (scan de vulnérabilités de l'image), archive vérifiée par SHA-256
 RUN case "${TARGETARCH}" in arm64) a=ARM64 ;; *) a=64bit ;; esac \
