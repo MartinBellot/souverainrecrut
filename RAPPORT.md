@@ -128,7 +128,7 @@ Résultat : **0 vulnérabilité HIGH ou CRITICAL bloquante, 0 secret**.
 
 **Publication** : étape `Publish`, exécutée seulement si tous les contrôles sont verts (tests, Quality Gate, Trivy). Elle fait `docker login` avec le credential Jenkins, `docker push` des deux tags, puis `docker image ls`. Le paramètre `REGISTRY` permet de viser un autre registre (vide = Docker Hub).
 
-**Vérification (build Jenkins n°6, SUCCESS)** : 308 tests, Quality Gate OK, image `1.0.0-bad2bc1` construite, Trivy sans blocage, puis push des tags `1.0.0-bad2bc1` et `dev` (même digest) vers un registre local de test. Jenkins masque l'identifiant (`****`) dans les logs. Pour publier sur Docker Hub, il reste à renseigner `DOCKERHUB_USERNAME` et `DOCKERHUB_TOKEN` dans `ci/.env`, puis à lancer le job avec `REGISTRY` vide.
+**Publication réelle (build Jenkins n°7, SUCCESS)** : commit `e34613f` de `origin/Dev` → 308 tests → Quality Gate OK → Trivy sans blocage → image publiée sur Docker Hub : **`martinbellot/souverainrecrut-backend:1.0.0-e34613f`** et `:dev` (même digest `sha256:8af86895b221…`). Le token Docker Hub est un access token stocké dans `ci/.env`, et Jenkins masque l'identifiant dans les logs.
 
 Commandes manuelles équivalentes (depuis `backend/`) :
 ```

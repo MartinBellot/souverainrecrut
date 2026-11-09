@@ -1,0 +1,32 @@
+// {{ ansible_managed }}
+// Crée le compte administrateur initial s'il n'existe pas (idempotent).
+const bcrypt = require("bcrypt");
+const { PrismaClient } = require("@prisma/client");
+
+const prisma = new PrismaClient();
+
+(async () => {
+  const email = process.env.ADMIN_EMAIL;
+  const existing = await prisma.user.findUnique({ where: { email } });
+
+  if (existing) {
+    console.log("ADMIN_EXISTS");
+    return;
+  }
+
+  await prisma.user.create({
+    data: {
+      firstName: "Admin",
+      lastName: "SouverainRecrut",
+      email,
+      password: await bcrypt.hash(process.env.ADMIN_PASSWORD, 10),
+      role: "ADMIN",
+    },
+  });
+  console.log("ADMIN_CREATED");
+})()
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  })
+  .finally(() => prisma.$disconnect());

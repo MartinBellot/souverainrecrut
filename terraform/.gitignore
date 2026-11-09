@@ -1,0 +1,8 @@
+# État et clés : contiennent la clé privée de déploiement
+.terraform/
+*.tfstate
+*.tfstate.*
+.secrets/
+*.tfvars
+!example.tfvars
+crash.log

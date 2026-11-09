@@ -1,0 +1,44 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# Déploie un tag de l'image Backend, vérifie la santé de l'API,
+# et revient automatiquement au tag précédent en cas d'échec.
+# Usage : ./deploy.sh <tag>     (utilisé par Ansible et GitLab CI)
+set -eu
+cd "$(dirname "$0")"
+
+NEW_TAG="${1:?Usage : deploy.sh <tag>}"
+PREV_TAG="$(sed -n 's/^IMAGE_TAG=//p' release.env 2>/dev/null || true)"
+
+compose() { docker compose --env-file .env --env-file release.env "$@"; }
+
+wait_ready() {
+  i=0
+  while [ "$i" -lt 30 ]; do
+    if curl -fsS "http://127.0.0.1:{{ api_port }}/v1/ready" 2>/dev/null | grep -q '"status":"READY"'; then
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 2
+  done
+  return 1
+}
+
+echo "▶ Déploiement de {{ backend_image }}:${NEW_TAG} (précédent : ${PREV_TAG:-aucun})"
+echo "IMAGE_TAG=${NEW_TAG}" > release.env
+compose pull --quiet api migrate
+compose up -d --remove-orphans
+
+if wait_ready; then
+  echo "✅ API prête : {{ backend_image }}:${NEW_TAG}"
+  exit 0
+fi
+
+echo "❌ L'API n'est pas prête avec ${NEW_TAG}."
+compose logs --tail=50 api migrate || true
+if [ -n "${PREV_TAG}" ] && [ "${PREV_TAG}" != "${NEW_TAG}" ]; then
+  echo "↩ Retour arrière vers ${PREV_TAG}"
+  echo "IMAGE_TAG=${PREV_TAG}" > release.env
+  compose up -d --remove-orphans
+  wait_ready && echo "Retour arrière effectué."
+fi
+exit 1

@@ -1,0 +1,7 @@
+# Généré par Terraform (terraform/main.tf) — ne pas modifier à la main.
+deploy_user: "deploy"
+deploy_dir: "/opt/souverainrecrut"
+api_port: 4000
+backend_image: "martinbellot/souverainrecrut-backend"
+image_tag: "dev"
+deploy_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN3II4E9X+gE1jfIYzW1tRrG0XD4fJR2Y1hJ+hBM7ARZ"

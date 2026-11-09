@@ -1,0 +1,111 @@
+# ======================================================
+# Projet GitLab de déploiement — SouverainRecrut Backend
+#
+# Déploie sur le VPS l'image Docker Hub martinbellot/souverainrecrut-backend:<IMAGE_TAG>
+# publiée par Jenkins (après tests, SonarQube et Trivy).
+#
+# Variables CI/CD (Settings → CI/CD → Variables), toutes "Protected" :
+#   DOCKERHUB_USERNAME  Variable                     ex. martinbellot
+#   DOCKERHUB_TOKEN     Variable, Masked and hidden  access token Docker Hub (lecture suffit)
+#   DEPLOY_HOST         Variable                     148.230.115.48
+#   DEPLOY_USER         Variable                     deploy
+#   SSH_PRIVATE_KEY     File                         terraform/.secrets/deploy_ed25519
+#   SSH_KNOWN_HOSTS     File                         ssh-keyscan -t ed25519 <DEPLOY_HOST>
+#   IMAGE_TAG           Variable                     ex. 1.0.0-<commit> (surchargeable au lancement)
+#
+# Aucun secret n'est versionné ni affiché : token passé par stdin, clé chargée
+# dans un agent SSH, hôte vérifié par known_hosts (pas de StrictHostKeyChecking=no).
+# ======================================================
+
+stages:
+  - check
+  - deploy
+  - verify
+
+variables:
+  BACKEND_IMAGE: "martinbellot/souverainrecrut-backend"
+  DEPLOY_DIR: "/opt/souverainrecrut"
+  API_PORT: "4000"
+
+default:
+  image: alpine:3.20
+  interruptible: false
+
+# Déploiement automatique quand le pipeline est lancé à la main (Run pipeline),
+# par l'API ou par un déclencheur ; manuel (bouton) sur un push de la branche par défaut.
+.deploy_rules: &deploy_rules
+  rules:
+    - if: '$CI_PIPELINE_SOURCE =~ /^(web|api|trigger)$/'
+      when: on_success
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+    - when: never
+
+check:config:
+  stage: check
+  <<: *deploy_rules
+  allow_failure: false
+  before_script:
+    - apk add --no-cache curl jq >/dev/null
+  script:
+    - |
+      missing=""
+      for v in DOCKERHUB_USERNAME DOCKERHUB_TOKEN DEPLOY_HOST DEPLOY_USER SSH_PRIVATE_KEY SSH_KNOWN_HOSTS IMAGE_TAG; do
+        eval "val=\${$v:-}"
+        [ -n "$val" ] || missing="$missing $v"
+      done
+      [ -z "$missing" ] || { echo "Variables manquantes :$missing"; exit 1; }
+    - echo "Image à déployer : ${BACKEND_IMAGE}:${IMAGE_TAG}"
+    # Le tag doit exister sur Docker Hub et contenir une image linux/amd64 (architecture du VPS).
+    - |
+      token=$(curl -fsS -u "${DOCKERHUB_USERNAME}:${DOCKERHUB_TOKEN}" \
+        "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${BACKEND_IMAGE}:pull" | jq -r .token)
+      curl -fsS -H "Authorization: Bearer ${token}" \
+        -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json" \
+        "https://registry-1.docker.io/v2/${BACKEND_IMAGE}/manifests/${IMAGE_TAG}" -o manifest.json
+      if jq -e '.manifests' manifest.json >/dev/null; then
+        jq -e '.manifests[] | select(.platform.architecture == "amd64")' manifest.json >/dev/null \
+          || { echo "Le tag ${IMAGE_TAG} ne contient pas d'image amd64."; exit 1; }
+      else
+        digest=$(jq -r .config.digest manifest.json)
+        arch=$(curl -fsSL -H "Authorization: Bearer ${token}" \
+          "https://registry-1.docker.io/v2/${BACKEND_IMAGE}/blobs/${digest}" | jq -r .architecture)
+        [ "$arch" = "amd64" ] || { echo "Le tag ${IMAGE_TAG} est en ${arch}, le VPS est en amd64."; exit 1; }
+      fi
+      echo "✅ ${BACKEND_IMAGE}:${IMAGE_TAG} disponible en linux/amd64"
+
+deploy:production:
+  stage: deploy
+  <<: *deploy_rules
+  needs: ["check:config"]
+  resource_group: production
+  environment:
+    name: production
+    url: "http://${DEPLOY_HOST}:${API_PORT}/v1"
+  before_script:
+    - apk add --no-cache openssh-client >/dev/null
+    - eval "$(ssh-agent -s)" >/dev/null
+    - chmod 600 "$SSH_PRIVATE_KEY"
+    - ssh-add -q "$SSH_PRIVATE_KEY"
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - cp "$SSH_KNOWN_HOSTS" ~/.ssh/known_hosts && chmod 644 ~/.ssh/known_hosts
+    - export SSH_TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
+  script:
+    # Le token transite par stdin : jamais dans la ligne de commande ni dans les logs.
+    - printf '%s' "$DOCKERHUB_TOKEN" | ssh "$SSH_TARGET" "docker login -u '${DOCKERHUB_USERNAME}' --password-stdin" >/dev/null
+    - ssh "$SSH_TARGET" "cd '${DEPLOY_DIR}' && ./deploy.sh '${IMAGE_TAG}'"
+  after_script:
+    - eval "$(ssh-agent -s)" >/dev/null && chmod 600 "$SSH_PRIVATE_KEY" && ssh-add -q "$SSH_PRIVATE_KEY"
+    - mkdir -p ~/.ssh && cp "$SSH_KNOWN_HOSTS" ~/.ssh/known_hosts
+    - ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "docker logout" >/dev/null 2>&1 || true
+
+verify:api:
+  stage: verify
+  <<: *deploy_rules
+  needs: ["deploy:production"]
+  before_script:
+    - apk add --no-cache curl jq >/dev/null
+  script:
+    - curl -fsS "http://${DEPLOY_HOST}:${API_PORT}/v1/health" | jq -e '.data.status == "UP"'
+    - curl -fsS "http://${DEPLOY_HOST}:${API_PORT}/v1/ready" | jq -e '.data.status == "READY" and .data.database == "CONNECTED"'
+    - curl -fsS "http://${DEPLOY_HOST}:${API_PORT}/v1/info" | jq '.data | {name, version, environment}'

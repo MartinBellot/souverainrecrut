@@ -1,0 +1,18 @@
+# Variables de déploiement (non sensibles).
+# Les valeurs propres au serveur (utilisateur, port, image, clé publique) sont
+# générées par Terraform dans terraform.yml.
+
+compose_project: souverainrecrut
+postgres_image: "postgres:16.15-alpine3.24"
+postgres_user: souverainrecrut
+postgres_db: souverainrecrut
+admin_email: "admin@souverainrecrut.com"
+frontend_url: "http://localhost:5173"
+
+# Paquets de base nécessaires au déploiement et à Ansible
+base_packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - python3
+  - ufw

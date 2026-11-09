@@ -25,6 +25,8 @@ pipeline {
       description: "Publier l'image si tous les contrôles passent")
     string(name: 'REGISTRY', defaultValue: '',
       description: 'Registre cible (vide = Docker Hub)')
+    string(name: 'TARGET_PLATFORM', defaultValue: 'linux/amd64',
+      description: "Architecture de l'image = celle du serveur de déploiement (le VPS est en amd64)")
   }
 
   environment {
@@ -127,7 +129,7 @@ pipeline {
         // retry : absorbe les erreurs réseau passagères vers le registre
         retry(2) {
           sh """
-            docker build --pull \
+            docker build --pull --platform ${params.TARGET_PLATFORM} \
               --build-arg VERSION=${env.APP_VERSION} \
               --build-arg REVISION=${env.GIT_COMMIT_FULL} \
               -t ${env.IMAGE_TAG} backend

@@ -1,0 +1,8 @@
+# Généré par Terraform (terraform/main.tf) — ne pas modifier à la main.
+[souverainrecrut]
+${server_name} ansible_host=${server_ip}
+
+[souverainrecrut:vars]
+ansible_user=${admin_user}
+ansible_ssh_private_key_file=${admin_ssh_private_key_path}
+ansible_python_interpreter=/usr/bin/python3
