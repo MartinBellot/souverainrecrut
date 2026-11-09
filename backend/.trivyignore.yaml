@@ -7,9 +7,10 @@ vulnerabilities:
     purls:
       - "pkg:npm/deepmerge-ts@7.1.5"
     statement: >-
-      2026-11-09 — deepmerge-ts n'est utilisé que par la CLI Prisma (@prisma/config)
-      pour lire prisma.config.ts au build ; le runtime @prisma/client et l'API ne le
-      chargent jamais, et il ne reçoit aucune entrée utilisateur. Correctif uniquement
-      en 8.0.0, non supporté par Prisma 6 (épinglé par @prisma/config@6.19.3).
+      2026-11-09 — deepmerge-ts n'est chargé que par la CLI Prisma (@prisma/config) :
+      au build (prisma generate) et dans le conteneur one-shot "migrate" (migrate deploy).
+      Il n'y fusionne que la configuration Prisma livrée dans l'image, jamais une entrée
+      utilisateur ; le runtime @prisma/client de l'API ne le charge pas. Correctif
+      uniquement en 8.0.0, non supporté par Prisma 6 (épinglé par @prisma/config@6.19.3).
       Action : migrer vers Prisma 7.
     expired_at: 2027-02-09

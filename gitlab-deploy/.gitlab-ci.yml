@@ -55,7 +55,7 @@ check:config:
         [ -n "$val" ] || missing="$missing $v"
       done
       [ -z "$missing" ] || { echo "Variables manquantes :$missing"; exit 1; }
-    - echo "Image à déployer : ${BACKEND_IMAGE}:${IMAGE_TAG}"
+    - 'echo "Image à déployer : ${BACKEND_IMAGE}:${IMAGE_TAG}"'
     # Le tag doit exister sur Docker Hub et contenir une image linux/amd64 (architecture du VPS).
     - |
       token=$(curl -fsS -u "${DOCKERHUB_USERNAME}:${DOCKERHUB_TOKEN}" \

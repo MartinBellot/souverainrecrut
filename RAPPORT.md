@@ -136,3 +136,60 @@ docker build --build-arg VERSION=1.0.0 --build-arg REVISION=$(git rev-parse HEAD
 docker image ls
 docker push VOTRE_COMPTE/souverainrecrut-backend:1.0.0-$(git rev-parse --short HEAD)
 ```
+
+## 6. Provisionnement et déploiement — partie 4 (09/11/2026)
+
+**Résultat** : l'API tourne sur le VPS et communique avec PostgreSQL : **http://148.230.115.48:4000/v1** (`/ready` → `READY`, base `CONNECTED`). Test de bout en bout réussi : connexion admin, création/suppression d'un candidat, 401 sans token.
+
+**4.1 — Serveur** : VPS existant à la place de VMware (`root@148.230.115.48`). Il tourne sous **Debian 13 (trixie)**, pas Ubuntu, en amd64, 2 vCPU, 8 Go de RAM, avec accès SSH et Internet vérifiés. Il héberge **déjà d'autres services en production** (stack ondes-voxel avec Caddy sur 80/443, serveur de jeu). Choix retenus :
+- pas de snapshot (décision de l'utilisateur) ;
+- playbook non intrusif ;
+- Docker Debian (`docker.io`) conservé.
+
+**4.2 — Terraform** (`terraform/`) : sans ESXi/vCenter, le provider vSphere est inutilisable. Terraform gère donc les ressources réellement disponibles :
+
+| Ressource | Rôle |
+|---|---|
+| `tls_private_key` | Paire de clés SSH dédiée au déploiement (GitLab) ; clé privée dans `terraform/.secrets/` (ignoré par git) |
+| `null_resource` + `remote-exec` | Vérification du serveur en lecture seule (OS, architecture, IP, Internet) ; échec si l'OS n'est pas supporté |
+| `local_file` | Génère l'inventaire et les variables Ansible : Terraform passe ensuite la main à Ansible |
+
+`terraform init`, `validate`, `plan` et `apply` : OK (connexion SSH via l'agent, car la clé admin est protégée par une passphrase).
+
+**4.3 — Ansible** (`ansible/`) : `ansible-playbook -i inventory.ini playbook.yml -e image_tag=<tag>`
+
+| Étape | Détail |
+|---|---|
+| Système | `apt upgrade` (safe), dépendances ; `needrestart` en mode liste (aucun service redémarré) ; reboot signalé, jamais forcé |
+| Docker | Détection : s'il est déjà présent, il est conservé ; sinon installation de Docker CE + Compose depuis le dépôt officiel. Service activé, versions vérifiées |
+| Déploiement | Utilisateur `deploy` (groupe docker, clé Terraform), `/opt/souverainrecrut` (0750), secrets générés **sur le serveur** (`.env` 0600, jamais versionnés) |
+| Stack | API + PostgreSQL 16 dédié, réseau isolé, base non exposée ; service `migrate` (migrations Prisma) avant l'API ; compte admin créé une fois |
+| Pare-feu | ufw : port 4000 ouvert |
+| Vérifications | Conteneurs, `/v1/ready` depuis le serveur, `/v1/health` depuis l'extérieur |
+
+Premier passage : `ok=21 changed=10 failed=0`. Second passage : **`changed=0`** (idempotent). Les services existants du serveur sont intacts.
+
+**`deploy.sh`** (sur le serveur, utilisé par Ansible et GitLab) : `pull`, puis `up`, puis contrôle de santé. Tests réels : un tag inexistant ne change rien ; une image incompatible déclenche le **retour arrière automatique** vers le tag précédent.
+
+**4.4 — GitLab** (`gitlab-deploy/.gitlab-ci.yml`, contenu du projet GitLab de déploiement) : jobs `check:config` (variables présentes, tag existant et en amd64 sur Docker Hub), `deploy:production` (SSH en `deploy`, token passé par stdin, `docker logout` à la fin) et `verify:api`. **Les 3 jobs ont été exécutés avec succès** contre le VPS, dans `alpine:3.20` comme sur un runner GitLab.
+
+| Variable GitLab (Settings → CI/CD → Variables, toutes *Protected*) | Type | Valeur |
+|---|---|---|
+| `DOCKERHUB_USERNAME` | Variable | `martinbellot` |
+| `DOCKERHUB_TOKEN` | Variable, **Masked and hidden** | access token Docker Hub |
+| `DEPLOY_HOST` | Variable | `148.230.115.48` |
+| `DEPLOY_USER` | Variable | `deploy` |
+| `SSH_PRIVATE_KEY` | **File** | contenu de `terraform/.secrets/deploy_ed25519` |
+| `SSH_KNOWN_HOSTS` | **File** | `ssh-keyscan -t ed25519 148.230.115.48` |
+| `IMAGE_TAG` | Variable | ex. `1.0.0-727aaad` (surchargeable au lancement) |
+
+**Défauts trouvés et corrigés pendant cette partie** :
+- **Image publiée en arm64** (Jenkins tourne sur un Mac Apple Silicon) alors que le VPS est en amd64 : l'API n'aurait pas démarré. Correction : build `linux/amd64` via **buildx** (ajouté à l'image Jenkins, binaire vérifié par SHA-256), paramètre `TARGET_PLATFORM`.
+- **YAML GitLab invalide** : un `echo "… : …"` était lu comme une clé YAML, et GitLab aurait rejeté le fichier. Détecté par la simulation, puis corrigé.
+- **Retour arrière inopérant** dans la première version de `deploy.sh` (`set -e` arrêtait le script avant le retour arrière), ce qui a causé environ 2 minutes d'arrêt de l'API pendant le test. Corrigé et revérifié.
+
+**Points d'attention** :
+- **Redémarrage du VPS en attente** (noyau mis à jour) : à planifier, il coupera aussi les autres services.
+- Lors d'un déploiement d'une image défaillante, l'API est indisponible le temps du retour arrière (environ 1 min) : pas de déploiement sans coupure (blue/green).
+- Le mot de passe admin est dans `/opt/souverainrecrut/.env` (`ADMIN_PASSWORD`) sur le serveur.
+- Le groupe `docker` donne à `deploy` des droits équivalents à root sur le serveur : c'est le compromis classique pour un déploiement Docker par SSH.

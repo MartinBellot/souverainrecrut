@@ -10,6 +10,7 @@ NEW_TAG="${1:?Usage : deploy.sh <tag>}"
 PREV_TAG="$(sed -n 's/^IMAGE_TAG=//p' release.env 2>/dev/null || true)"
 
 compose() { docker compose --env-file .env --env-file release.env "$@"; }
+set_release() { echo "IMAGE_TAG=$1" > release.env; }
 
 wait_ready() {
   i=0
@@ -24,21 +25,31 @@ wait_ready() {
 }
 
 echo "▶ Déploiement de {{ backend_image }}:${NEW_TAG} (précédent : ${PREV_TAG:-aucun})"
-echo "IMAGE_TAG=${NEW_TAG}" > release.env
-compose pull --quiet api migrate
-compose up -d --remove-orphans
+set_release "${NEW_TAG}"
 
-if wait_ready; then
+# 1. Téléchargement : en cas d'échec (tag inexistant…), rien n'a changé sur le serveur.
+if ! compose pull --quiet api migrate; then
+  echo "❌ Image introuvable ou inaccessible : ${NEW_TAG}. Aucun changement."
+  [ -n "${PREV_TAG}" ] && set_release "${PREV_TAG}"
+  exit 1
+fi
+
+# 2. Démarrage (migrations puis API) et contrôle de santé.
+if compose up -d --remove-orphans && wait_ready; then
   echo "✅ API prête : {{ backend_image }}:${NEW_TAG}"
   exit 0
 fi
 
+# 3. Échec : journaux puis retour arrière vers le tag précédent.
 echo "❌ L'API n'est pas prête avec ${NEW_TAG}."
-compose logs --tail=50 api migrate || true
+compose logs --tail=30 migrate api || true
 if [ -n "${PREV_TAG}" ] && [ "${PREV_TAG}" != "${NEW_TAG}" ]; then
   echo "↩ Retour arrière vers ${PREV_TAG}"
-  echo "IMAGE_TAG=${PREV_TAG}" > release.env
-  compose up -d --remove-orphans
-  wait_ready && echo "Retour arrière effectué."
+  set_release "${PREV_TAG}"
+  if compose up -d --remove-orphans && wait_ready; then
+    echo "↩ Retour arrière effectué : ${PREV_TAG} en service."
+  else
+    echo "⚠️ Retour arrière en échec : intervention manuelle requise."
+  fi
 fi
 exit 1
