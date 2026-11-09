@@ -17,6 +17,12 @@ describe("Application Express — routes transverses", () => {
     });
   });
 
+  it("ne divulgue pas le framework via l'en-tête X-Powered-By", async () => {
+    const res = await api().get("/").expect(200);
+
+    expect(res.headers["x-powered-by"]).toBeUndefined();
+  });
+
   it("GET /api-docs/ sert l'interface Swagger UI", async () => {
     const res = await api().get("/api-docs/").expect(200);
 

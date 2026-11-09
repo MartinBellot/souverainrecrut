@@ -13,7 +13,6 @@ export const createUserSchema = z.object({
     .max(100, "Le nom est trop long."),
 
   email: z
-    .string()
     .email("Adresse email invalide."),
 
   password: z
@@ -21,7 +20,7 @@ export const createUserSchema = z.object({
     .min(8, "Le mot de passe doit contenir au moins 8 caractères."),
 
   role: z
-    .nativeEnum(Role)
+    .enum(Role)
     .optional(),
 });
 
@@ -39,7 +38,6 @@ export const updateUserSchema = z.object({
     .optional(),
 
   email: z
-    .string()
     .email("Adresse email invalide.")
     .optional(),
 
@@ -49,6 +47,6 @@ export const updateUserSchema = z.object({
     .optional(),
 
   role: z
-    .nativeEnum(Role)
+    .enum(Role)
     .optional(),
 });

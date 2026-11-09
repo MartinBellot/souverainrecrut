@@ -2,18 +2,32 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+/**
+ * Lit une variable d'environnement.
+ * Une variable absente OU vide prend la valeur par défaut.
+ */
+const readEnv = (name: string, fallback: string): string => {
+  const value = process.env[name];
+
+  return value === undefined || value === "" ? fallback : value;
+};
+
+const DEFAULT_PORT = 4500;
+
+const parsedPort = Number.parseInt(readEnv("PORT", String(DEFAULT_PORT)), 10);
+
 export const env = {
-  port: Number(process.env.PORT) || 4500,
+  port: Number.isNaN(parsedPort) ? DEFAULT_PORT : parsedPort,
 
-  nodeEnv: process.env.NODE_ENV || "development",
+  nodeEnv: readEnv("NODE_ENV", "development"),
 
-  databaseUrl: process.env.DATABASE_URL || "",
+  databaseUrl: readEnv("DATABASE_URL", ""),
 
-  jwtSecret: process.env.JWT_SECRET || "",
+  jwtSecret: readEnv("JWT_SECRET", ""),
 
-  apiVersion: process.env.API_VERSION || "v1",
+  apiVersion: readEnv("API_VERSION", "v1"),
 
-  frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173"
+  frontendUrl: readEnv("FRONTEND_URL", "http://localhost:5173"),
 };
 
 /**

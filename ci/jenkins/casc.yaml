@@ -1,0 +1,79 @@
+# ======================================================
+# Configuration Jenkins as Code (JCasC)
+# Aucun secret ici : les valeurs ${...} viennent des variables
+# d'environnement du conteneur (fichier ci/.env, non versionné).
+# ======================================================
+jenkins:
+  systemMessage: "CI SouverainRecrut — configurée par JCasC"
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_ID}"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "dockerhub-credentials"
+              description: "Docker Hub — publication de l'image backend"
+              username: "${DOCKERHUB_USERNAME}"
+              password: "${DOCKERHUB_TOKEN}"
+          - string:
+              scope: GLOBAL
+              id: "sonarqube-token"
+              description: "Token d'analyse SonarQube"
+              secret: "${SONAR_TOKEN}"
+
+unclassified:
+  location:
+    url: "http://localhost:8080/"
+  sonarGlobalConfiguration:
+    buildWrapperEnabled: true
+    installations:
+      - name: "SonarQube"
+        serverUrl: "http://sonarqube:9000"
+        credentialsId: "sonarqube-token"
+
+tool:
+  sonarRunnerInstallation:
+    installations:
+      - name: "SonarScanner"
+        properties:
+          - installSource:
+              installers:
+                - sonarRunnerInstaller:
+                    id: "6.2.1.4610"
+
+jobs:
+  - script: >
+      pipelineJob('souverainrecrut-backend') {
+        description('Pipeline CI du backend : tests, SonarQube, image Docker, Trivy, publication.')
+        properties {
+          pipelineTriggers {
+            triggers {
+              // Jenkins local : pas de webhook GitHub entrant possible → scrutation.
+              pollSCM { scmpoll_spec('H/5 * * * *') }
+            }
+          }
+        }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote { url('${GIT_REPOSITORY_URL}') }
+                branch('*/Dev')
+              }
+            }
+            scriptPath('Jenkinsfile')
+            lightweight(true)
+          }
+        }
+      }

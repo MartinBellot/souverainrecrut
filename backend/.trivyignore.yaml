@@ -1,0 +1,15 @@
+# ======================================================
+# Exceptions Trivy acceptées — chacune justifiée, ciblée et à durée limitée.
+# À l'expiration (expired_at), l'exception tombe et le scan redevient bloquant.
+# ======================================================
+vulnerabilities:
+  - id: CVE-2026-40345
+    purls:
+      - "pkg:npm/deepmerge-ts@7.1.5"
+    statement: >-
+      2026-11-09 — deepmerge-ts n'est utilisé que par la CLI Prisma (@prisma/config)
+      pour lire prisma.config.ts au build ; le runtime @prisma/client et l'API ne le
+      chargent jamais, et il ne reçoit aucune entrée utilisateur. Correctif uniquement
+      en 8.0.0, non supporté par Prisma 6 (épinglé par @prisma/config@6.19.3).
+      Action : migrer vers Prisma 7.
+    expired_at: 2027-02-09

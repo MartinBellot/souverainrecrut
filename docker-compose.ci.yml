@@ -1,0 +1,45 @@
+# ======================================================
+# Plateforme CI locale : Jenkins + SonarQube
+#   cp ci/.env.example ci/.env   # puis renseigner les secrets
+#   docker compose -f docker-compose.ci.yml up -d --build
+# Les secrets sont lus depuis ci/.env (non versionné, cf. ci/.env.example).
+# ======================================================
+services:
+  jenkins:
+    build: ./ci/jenkins
+    image: souverainrecrut-jenkins:local
+    container_name: sr-jenkins
+    ports:
+      - "8080:8080"
+    env_file: ./ci/.env
+    # Accès au démon Docker de l'hôte (build + scan + push de l'image).
+    # Le groupe 0 donne accès à la socket sans exécuter Jenkins en root.
+    group_add:
+      - "0"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      sonarqube:
+        condition: service_healthy
+
+  sonarqube:
+    image: sonarqube:10.7-community
+    container_name: sr-sonarqube
+    ports:
+      - "9000:9000"
+    environment:
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9000/api/system/status | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  jenkins_home:
+  sonarqube_data:
+  sonarqube_extensions:

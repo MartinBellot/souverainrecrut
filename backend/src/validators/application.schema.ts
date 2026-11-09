@@ -11,10 +11,10 @@ export const createApplicationSchema = z.object({
     .min(1, "L'offre est obligatoire."),
 
   status: z
-    .nativeEnum(ApplicationStatus)
+    .enum(ApplicationStatus)
     .optional(),
 });
 
 export const updateApplicationSchema = z.object({
-  status: z.nativeEnum(ApplicationStatus),
+  status: z.enum(ApplicationStatus),
 });
