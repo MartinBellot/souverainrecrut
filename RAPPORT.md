@@ -1,195 +1,432 @@
-# Rapport de travail — SouverainRecrut
+# SouverainRecrut — Chaîne CI/CD du Backend
 
-## 1. Tests du backend — consigne 3.2 (09/11/2026)
+**Martin BELLOT** · M2 · SUP DE VINCI Rennes · RNCP 40166 · Projet CI/CD · novembre 2026
 
-**Demande** : écrire les tests unitaires, d'intégration et E2E (en pyramide), avec une couverture proche de 100 %.
+| | |
+|---|---|
+| Dépôt (code, CI, infrastructure) | [github.com/MartinBellot/souverainrecrut — branche `Dev`](https://github.com/MartinBellot/souverainrecrut/tree/Dev) |
+| Projet de déploiement | [gitlab.com/martin.bellot.off/souverainrecrut](https://gitlab.com/martin.bellot.off/souverainrecrut) |
+| Image Docker | [hub.docker.com/r/martinbellot/souverainrecrut-backend](https://hub.docker.com/r/martinbellot/souverainrecrut-backend) |
+| API en production | http://148.230.115.48:4000/v1/info · [Swagger](http://148.230.115.48:4000/api-docs/) |
 
-**Outils** : Jest 29 + ts-jest, Supertest, PostgreSQL 16 sous Docker pour les E2E.
+## Sommaire
 
-| Niveau | Tests | Part | Périmètre |
+1. [Synthèse](#1-synthèse)
+2. [Architecture](#2-architecture)
+3. [Qualité : tests et SonarQube](#3-qualité--tests-et-sonarqube)
+4. [Intégration continue : Jenkins](#4-intégration-continue--jenkins)
+5. [Image Docker et sécurité](#5-image-docker-et-sécurité)
+6. [Infrastructure : Terraform et Ansible](#6-infrastructure--terraform-et-ansible)
+7. [Déploiement : Docker Compose et GitLab CI](#7-déploiement--docker-compose-et-gitlab-ci)
+8. [Vérification, rollback et données](#8-vérification-rollback-et-données)
+9. [Gestion des secrets](#9-gestion-des-secrets)
+10. [Conformité aux exigences](#10-conformité-aux-exigences)
+11. [Défauts détectés et corrigés](#11-défauts-détectés-et-corrigés)
+12. [Limites et pistes](#12-limites-et-pistes)
+13. [Procédures de référence](#13-procédures-de-référence)
+
+---
+
+## 1. Synthèse
+
+Une modification du Backend poussée sur `Dev` est **testée, analysée, construite, scannée et publiée** automatiquement par Jenkins. Elle est ensuite **déployée sur approbation** par GitLab CI sur un serveur provisionné par Terraform et Ansible.
+
+| Indicateur | Résultat |
+|---|---|
+| Tests | **330** (244 unitaires · 64 intégration · 22 E2E), tous verts |
+| Couverture | **100 %** (lignes, branches, fonctions) |
+| SonarQube | Quality Gate **PASSED** · 0 bug · 0 vulnérabilité · 0 code smell · 0 % duplication |
+| Trivy | **0** vulnérabilité bloquante · 0 secret dans l'image |
+| Image | `martinbellot/souverainrecrut-backend:<version>-<commit>` (linux/amd64) |
+| Production | API + PostgreSQL sur le VPS, déployés et vérifiés par GitLab CI |
+| Continuité | Rollback testé (automatique, par job GitLab, et restauration de la base) |
+| Secrets | 0 dans le dépôt (13 commits analysés), 0 dans les journaux CI |
+
+---
+
+## 2. Architecture
+
+```mermaid
+flowchart LR
+    DEV([Développeur]) -->|git push Dev| GH[(GitHub<br/>code + CI + IaC)]
+
+    subgraph CI ["Intégration continue — Jenkins (Docker)"]
+        direction TB
+        J1[Checkout Dev] --> J2[npm ci + Prisma] --> J3[Tests + couverture]
+        J3 --> J4[Analyse SonarQube] --> J5{Quality Gate}
+        J5 -->|PASSED| J6[Build image<br/>linux/amd64] --> J7{Trivy}
+        J7 -->|0 bloquante| J8[Publication]
+    end
+
+    GH -->|scrutation| J1
+    J4 <--> SQ[(SonarQube)]
+    J8 -->|1.0.0-commit| HUB[(Docker Hub)]
+
+    subgraph CD ["Déploiement — GitLab CI"]
+        direction TB
+        G1[Validation tag + Compose] --> G2{{Approbation<br/>manuelle}} --> G3[Déploiement SSH] --> G4[Vérifications]
+        G5[Rollback manuel]
+    end
+
+    GH -.->|sync.sh : deployment/| G1
+    HUB -->|docker pull| VPS
+    G3 --> VPS
+    G5 --> VPS
+
+    subgraph VPS ["VPS Debian 13 — /opt/souverainrecrut"]
+        direction TB
+        M[migrate<br/>Prisma] --> API[API Express :4000]
+        API --> PG[(PostgreSQL 16<br/>volume pgdata)]
+        M --> PG
+    end
+
+    TF[Terraform] -->|clé SSH, contrôle, inventaire| ANS[Ansible] -->|Docker, utilisateur, stack| VPS
+```
+
+| Outil | Rôle | Où il tourne |
+|---|---|---|
+| **GitHub** | Source unique : code, tests, `Jenkinsfile`, Terraform, Ansible, `deployment/` | SaaS |
+| **Jenkins** | Intégration continue : tests → SonarQube → image → Trivy → Docker Hub | Conteneur local (`docker-compose.ci.yml`) |
+| **SonarQube** | Qualité, sécurité et couverture, Quality Gate bloquant | Conteneur local |
+| **Trivy** | Scan des vulnérabilités et des secrets de l'image | Dans l'image Jenkins |
+| **Docker Hub** | Registre des images versionnées | SaaS |
+| **Terraform** | Clé de déploiement, contrôle du serveur, inventaire Ansible | Poste d'administration |
+| **Ansible** | Configuration du serveur et installation initiale de la stack | Poste d'administration → VPS |
+| **GitLab CI** | Déploiement continu avec approbation, vérification et rollback | SaaS (runners GitLab) |
+| **Docker Compose** | Orchestration API + PostgreSQL sur le serveur | VPS |
+
+**Choix structurants**
+- **Séparer CI et CD** : Jenkins *produit* une image vérifiée, GitLab la *déploie*. Le serveur ne reconstruit jamais l'image : ce qui est déployé est exactement ce qui a été testé et scanné.
+- **Une source unique pour le déploiement** : le dossier `deployment/` est utilisé à la fois par Ansible (installation) et par GitLab (mises à jour). Le projet GitLab en est une copie générée par `gitlab-deploy/sync.sh`.
+- **Tout en code** : Jenkins (JCasC), Quality Gate (script), infrastructure (Terraform, Ansible), déploiement (Compose, scripts). Une procédure manuelle n'est jamais nécessaire.
+- **Pas de VMware** : le déploiement cible un VPS existant (Debian 13), qui héberge aussi d'autres services. Toutes les opérations ont donc été conçues pour être **non intrusives** (stack, réseau et volume isolés, aucun redémarrage imposé).
+
+```
+souverainrecrut/
+├── backend/            API (Express, Prisma), tests, Dockerfile, sonar-project.properties
+├── Jenkinsfile         pipeline CI
+├── ci/                 image Jenkins (JCasC, plugins), script du Quality Gate
+├── terraform/          main.tf, variables.tf, outputs.tf, providers.tf
+├── ansible/            inventory.ini, playbook.yml, templates
+├── deployment/         docker-compose.yml, .env.example, deploy.sh, restore.sh
+├── gitlab-deploy/      .gitlab-ci.yml, sync.sh, setup-variables.sh
+└── docs/captures/      captures du rapport et script qui les produit (capture.py)
+```
+
+---
+
+## 3. Qualité : tests et SonarQube
+
+**Pyramide de tests** (Jest + Supertest) :
+
+| Niveau | Tests | Ce qui est réel | Ce qui est simulé |
 |---|---|---|---|
-| Unitaires | 244 | 74 % | Une classe ou une fonction isolée, dépendances simulées (mocks) |
-| Intégration | 63 | 19 % | App Express complète via HTTP, seul Prisma est simulé |
-| E2E | 22 | 7 % | Serveur réel + vrai PostgreSQL : parcours de recrutement complet, sécurité |
+| Unitaires | 244 (74 %) | une classe ou une fonction | toutes ses dépendances |
+| Intégration | 64 (19 %) | toute l'API HTTP : routes, auth, RBAC, validation, erreurs | Prisma uniquement |
+| E2E | 22 (7 %) | serveur + PostgreSQL réels : parcours de recrutement complet | rien |
 
-**Couverture : 100 %** (instructions, branches, fonctions, lignes), atteinte sans base de données. La CI échoue si elle passe sous 95 %.
+Fonctionnalités couvertes : authentification (JWT), candidats, offres, candidatures, contrôle d'accès ADMIN/RECRUITER, pagination, validation, codes d'erreur.
 
-**Rapports produits pour la CI** (`npm run test:ci`) : `coverage/lcov.info` (couverture, SonarQube), `coverage/sonar-report.xml` (exécution des tests, SonarQube), `reports/junit.xml` (Jenkins).
+![Résultat des tests](docs/captures/terminal-tests.png)
 
-**Commandes** (depuis `backend/`) :
-- `npm test` : tests unitaires et d'intégration
-- `npm run test:ci` : mêmes tests, avec tous les rapports pour la CI
-- `npm run test:coverage` : mêmes tests, avec le rapport de couverture
-- `npm run test:db:up` puis `npm run test:e2e` : tests E2E
-- `npm run typecheck` : vérification des types TypeScript
+La couverture atteint **100 % sans base de données**, donc la CI n'a pas besoin de PostgreSQL. Elle échoue sous 95 %. Les rapports `lcov.info` (SonarQube), `sonar-report.xml` (SonarQube) et `junit.xml` (Jenkins) sont produits par `npm run test:ci`.
 
-**Organisation** : `tests/unit` (même arborescence que `src/`), `tests/integration` (un fichier par ressource), `tests/e2e`, `tests/helpers`. Les E2E refusent de tourner sur une base dont le nom ne finit pas par `_test`.
+![Rapport de couverture](docs/captures/couverture.png)
 
-## 2. Correction des défauts (09/11/2026)
+**Quality Gate « SouverainRecrut »** (`ci/sonar/setup-quality-gate.sh`, appliqué au nouveau code **et** au code global) :
 
-**Demande** : corriger les problèmes du code.
+| Condition | Seuil |
+|---|---|
+| Fiabilité, sécurité, maintenabilité | note A |
+| Security hotspots revus | 100 % |
+| Couverture | ≥ 80 % |
+| Duplication | ≤ 3 % |
 
-| # | Défaut | Correction |
+Première analyse : 13 code smells et 1 hotspot (`X-Powered-By`), tous corrigés. Le gate a aussi été **vérifié en échec** : sans rapport de couverture, il passe à FAILED et la pipeline s'arrête.
+
+![Tableau de bord SonarQube](docs/captures/sonarqube-dashboard.png)
+
+---
+
+## 4. Intégration continue : Jenkins
+
+Jenkins est entièrement décrit par du code : `ci/jenkins/Dockerfile` (Node 22, CLI Docker + buildx, Trivy vérifié par SHA-256), `plugins.txt` et `casc.yaml` (administrateur, serveur SonarQube, credentials, job). Le job scrute la branche `Dev`.
+
+| Étape | Rôle | Bloquante |
 |---|---|---|
-| 1 | 🔴 La migration ne correspond pas au schéma : les suppressions en cascade échouent (500) | Nouvelle migration `20261109120000_fix_cascade_and_unique_application` |
-| 2 | 🔴 Un candidat peut postuler deux fois à la même offre (index unique absent) | Même migration. Les doublons renvoient maintenant 409. |
-| 3 | 🔴 Les routes `/users` renvoient le hash du mot de passe | `publicUserSelect` : le champ `password` n'est jamais lu, sauf pour la connexion |
-| 4 | 🔴 `PUT /users/:id` enregistre le mot de passe **en clair** | Le mot de passe est haché à la mise à jour, et l'email est vérifié contre les doublons (409) |
-| 5 | 🟠 Erreurs Prisma renvoyées en 500 | Traduction dans `errorMiddleware` : P2002 → 409, P2003 → 400, P2025 → 404 |
-| 6 | 🟠 `POST /auth/login` sans corps renvoie 500 | Validation Zod `loginSchema` (400) |
-| 7 | 🟡 JSON mal formé ou corps trop gros renvoie 500 | Réponses 400 et 413 |
-| 8 | 🟡 `?page=abc` produit `NaN`, puis une erreur 500 | La pagination revient aux valeurs par défaut |
-| 9 | 🟡 Le serveur démarre sans `JWT_SECRET`, et toutes les connexions échouent | Arrêt au démarrage si `JWT_SECRET` ou `DATABASE_URL` manque |
-| 10 | 🟡 Dockerfile en Node 20 alors que `engines` exige ≥ 22 ; pas de `.dockerignore` (le `.env` et les `node_modules` macOS étaient copiés dans l'image) | Node 22, OpenSSL pour Prisma, `--omit=dev`, ajout d'un `.dockerignore` |
-| 11 | 🟡 Swagger pointe vers `localhost:4500` alors que l'API écoute sur le port 4000 | URL relative `/v1` |
+| Checkout Dev | Récupère le commit, calcule le tag `<version>-<commit>` | — |
+| Install, Prisma generate | `npm ci` (lockfile), client Prisma | oui |
+| Tests | `typecheck` + `test:ci`, publication JUnit et couverture HTML | oui |
+| SonarQube analysis | Analyse avec version = tag | oui |
+| Quality Gate | Attend le verdict par webhook | **oui** |
+| Build image | `docker buildx build --platform linux/amd64` | oui |
+| Trivy scan | Rapport complet archivé, puis contrôle bloquant | **oui** |
+| Publish | `docker login` (credential Jenkins), push `<version>-<commit>` et `dev` | uniquement si tout est vert |
 
-**Vérification** : chaque défaut a maintenant un test de non-régression. 329 tests passent, la couverture reste à 100 %, et l'image Docker se construit et répond `READY` sur une vraie base.
+![Pipeline Jenkins](docs/captures/jenkins-pipeline.png)
 
-**⚠️ Avant de déployer la migration** : supprimer les doubles candidatures déjà présentes en base, sinon la création de l'index unique échoue. C'est arrivé sur la base de test.
+![Tests publiés dans Jenkins](docs/captures/jenkins-tests.png)
 
-**Points non traités (choix métier à trancher)** :
-- Un recruteur peut créer une offre au nom d'un autre recruteur (`recruiterId` vient du corps de la requête).
-- Les emails des utilisateurs ne sont pas mis en minuscules, contrairement à ceux des candidats.
-- Le JWT d'un utilisateur supprimé reste valide jusqu'à son expiration (24 h).
+---
 
-## 3. Qualité avec SonarQube — consigne 3.3 (09/11/2026)
+## 5. Image Docker et sécurité
 
-**Configuration** : `backend/sonar-project.properties` (sources, tests, rapports lcov et d'exécution des tests). Le Quality Gate est créé par `ci/sonar/setup-quality-gate.sh` : script idempotent, token passé par variable d'environnement.
-
-**Quality Gate « SouverainRecrut »** : notes A en fiabilité, sécurité et maintenabilité, 100 % des security hotspots revus, couverture ≥ 80 %, duplication ≤ 3 %. Ces seuils s'appliquent au nouveau code **et** au code global.
-
-| Indicateur | 1ʳᵉ analyse | Après corrections |
-|---|---|---|
-| Bugs / Vulnérabilités | 0 / 0 | 0 / 0 |
-| Code smells | 13 | **0** |
-| Security hotspots | 1 (en-tête `X-Powered-By`) | **0** |
-| Duplication / Couverture | 0 % / 100 % | 0 % / 100 % |
-| Quality Gate | PASSED | **PASSED** |
-
-**Corrections** : API Zod dépréciées (`nativeEnum`, `string().email()`, `ZodSchema`), lecture des variables d'environnement sans `||`, `app.disable("x-powered-by")`.
-
-**Gate vérifié dans les deux sens** : une analyse sans rapport de couverture donne **FAILED** (couverture 0 %), et la pipeline s'arrête.
-
-## 4. Jenkins et chaîne CI — consignes 3.4 et 3.5 (09/11/2026)
-
-**Lancement** : `cp ci/.env.example ci/.env` (renseigner les secrets), puis `docker compose -f docker-compose.ci.yml up -d --build`. Ensuite `ci/sonar/setup-quality-gate.sh`. Jenkins : http://localhost:8080, SonarQube : http://localhost:9000.
-
-| Élément | Mise en œuvre |
+| Exigence | Mise en œuvre (`backend/Dockerfile`) |
 |---|---|
-| Image Jenkins (`ci/jenkins/Dockerfile`) | Jenkins LTS + Node 22, CLI Docker, Trivy 0.76.1 (SHA-256 vérifié) |
-| Plugins (`plugins.txt`) | Git, GitHub, Pipeline, SonarQube Scanner, Docker Pipeline, JCasC, Job DSL, JUnit, HTML Publisher |
-| Configuration (`casc.yaml`, JCasC) | Admin, serveur SonarQube, SonarScanner, credentials et job créés automatiquement |
-| Secrets | Lus depuis `ci/.env` (ignoré par git) : **aucun secret dans le dépôt** |
-| Accès Docker | Socket de l'hôte, Jenkins **non root** (groupe 0) |
-| Pipeline (`Jenkinsfile`, racine) | Checkout Dev → `npm ci` → Prisma generate → typecheck + tests → SonarQube → Quality Gate → build image → Trivy → publication Docker Hub |
-| Publication | Uniquement si tout est vert ; tags `<sha>` et `dev` ; paramètre `PUBLISH` |
+| Reproductible | Image de base figée par version **et** digest, `npm ci` sur le lockfile |
+| Minimale | Build multi-étapes, dépendances de production seulement, `npm`/`npx` retirés de l'image finale, `.dockerignore` strict |
+| Sans secret | `.env` exclu du contexte ; secrets fournis au lancement ; Trivy recherche les secrets |
+| Sûre | Utilisateur `node` (non root), `HEALTHCHECK` |
+| Traçable | Tag `<version>-<commit>` + labels OCI `version` et `revision` (commit complet) |
+| Compatible | Construite pour `linux/amd64`, l'architecture du serveur (Jenkins tourne sur un Mac arm64) |
 
-**Vérification** : pipeline exécutée sur ce Jenkins local avec le code actuel (via un dépôt git temporaire, sans push). Résultats : 308 tests publiés dans Jenkins, Quality Gate OK reçu par webhook, image construite. **Trivy a bloqué** la publication sur une CVE critique (`proxy-addr@2.0.7`, usurpation d'IP), corrigée par la mise à jour en 2.0.8.
+**Seuils Trivy**
 
-**Dockerfile backend optimisé** : un seul `npm ci` (suivi de `npm prune --omit=dev`) au lieu de deux téléchargements, et exécution en utilisateur `node` (non root). Le premier build a été très lent (7 min de `npm ci`) parce que le réseau de Docker Desktop était dégradé ; le double téléchargement doublait cette attente.
-
-**Points d'attention** :
-- Avertissement Jest « A worker process has failed to exit gracefully » en CI : Jest lançait 13 workers (14 cœurs) qui se concurrençaient à l'arrêt. Corrigé avec `--maxWorkers=2` dans `test:ci`, ce qui accélère aussi les tests (5 s).
-- Trivy 0.58 est introuvable : les releases 0.27 à 0.69.1 ont été retirées de GitHub après l'incident de sécurité de 2026. Il faut utiliser une version récente.
-- Jenkins tourne en local : GitHub ne peut pas le joindre par webhook, donc le job scrute le dépôt toutes les 5 minutes.
-- Les E2E (PostgreSQL) ne tournent pas dans la pipeline : la couverture à 100 % est atteinte sans eux.
-
-## 5. Image Docker et publication — consigne 3.6 (09/11/2026)
-
-**Dockerfile backend revu** :
-
-| Exigence | Mise en œuvre |
+| Catégorie | Décision |
 |---|---|
-| Reproductible | Image de base figée par version **et** digest (`node:22.23.4-alpine3.24@sha256:…`), `npm ci` sur le lockfile |
-| Pas de fichiers inutiles | Build multi-étapes, dépendances de prod uniquement (`npm prune --omit=dev`), `.dockerignore` strict (tests, rapports, docs, config CI) |
-| Pas de secrets | `.env` exclu et vérifié absent de l'image ; secrets fournis au lancement (`-e`) ; Trivy recherche les secrets |
-| Sûre | Exécution en utilisateur `node` (non root), `HEALTHCHECK` sur `/v1/health` |
-| Traçable | Labels OCI `version` et `revision` (commit complet) |
+| HIGH / CRITICAL avec correctif | **bloquant** |
+| Secret détecté | **bloquant** |
+| MEDIUM / LOW, ou sans correctif | rapport archivé, non bloquant |
+| Exception | `backend/.trivyignore.yaml` : justifiée, limitée à un paquet et une version, **date d'expiration** |
 
-**Défaut corrigé** : l'image exposait le port 4000, mais l'application écoutait sur 4500 par défaut. Le `Dockerfile` fixe maintenant `PORT=4000`.
+Le premier scan a bloqué la pipeline sur 26 vulnérabilités HIGH. Traitement : `npm` retiré de l'image, dépendances transitives mises à jour (versions publiées depuis au moins 2 semaines), Prisma 6.19.3. Une seule exception subsiste : `deepmerge-ts` (CVE-2026-40345). Elle n'est chargée que par la CLI Prisma pour lire sa configuration, jamais sur une entrée utilisateur ; le correctif n'existe qu'en version 8, que Prisma 6 ne supporte pas. Elle expire le 09/02/2027.
 
-**Tags** : `<version>-<commit>` (ex. `1.0.0-d794c86`), immuable et traçable, et `dev`, qui pointe sur la dernière image validée de la branche Dev. La version est lue dans `package.json`.
+![Synthèse Trivy](docs/captures/terminal-trivy.png)
 
-**Seuils Trivy** :
-- **Bloquant** : toute vulnérabilité HIGH ou CRITICAL disposant d'un correctif, et tout secret détecté.
-- **Non bloquant** : MEDIUM, LOW et vulnérabilités sans correctif ; le rapport complet (JSON + tableau) est archivé dans Jenkins.
-- **Exceptions** : `backend/.trivyignore.yaml`, chacune justifiée, limitée à un paquet et à une version, avec une **date d'expiration**.
+![Tags publiés sur Docker Hub](docs/captures/terminal-dockerhub-tags.png)
 
-**Résultat du durcissement** : le premier scan avec ces seuils a **bloqué** la pipeline sur 26 vulnérabilités HIGH.
+> La page web de Docker Hub bloque les navigateurs automatisés (Cloudflare) : la liste ci-dessus est construite à partir de l'API publique de Docker Hub. On y voit `1.0.0-e34613f` en arm64 : c'est la publication antérieure au correctif d'architecture (§ 11).
 
-| Origine | Traitement |
-|---|---|
-| `npm` embarqué dans l'image Node (`pacote`, `sigstore`, `ip-address`…) | `npm`, `npx` et `corepack` retirés de l'image finale (inutiles à l'exécution) |
-| Dépendances transitives de l'app (`body-parser`, `fast-uri`, `js-yaml`, `brace-expansion`) | `npm update` dans les plages existantes, uniquement vers des versions publiées depuis au moins 2 semaines |
-| `effect` (CLI Prisma) | Prisma 6.16.2 → **6.19.3** ; 308 tests et 22 E2E OK |
-| `deepmerge-ts` (CLI Prisma) | Correctif seulement en 8.0 (non supporté par Prisma 6). La CVE n'est pas exploitable ici, car le paquet n'est chargé que par la CLI, jamais par l'API. **Exception jusqu'au 09/02/2027**, action : migrer vers Prisma 7 |
+---
 
-Résultat : **0 vulnérabilité HIGH ou CRITICAL bloquante, 0 secret**.
+## 6. Infrastructure : Terraform et Ansible
 
-**Publication** : étape `Publish`, exécutée seulement si tous les contrôles sont verts (tests, Quality Gate, Trivy). Elle fait `docker login` avec le credential Jenkins, `docker push` des deux tags, puis `docker image ls`. Le paramètre `REGISTRY` permet de viser un autre registre (vide = Docker Hub).
-
-**Publication réelle (build Jenkins n°7, SUCCESS)** : commit `e34613f` de `origin/Dev` → 308 tests → Quality Gate OK → Trivy sans blocage → image publiée sur Docker Hub : **`martinbellot/souverainrecrut-backend:1.0.0-e34613f`** et `:dev` (même digest `sha256:8af86895b221…`). Le token Docker Hub est un access token stocké dans `ci/.env`, et Jenkins masque l'identifiant dans les logs.
-
-Commandes manuelles équivalentes (depuis `backend/`) :
-```
-docker build --build-arg VERSION=1.0.0 --build-arg REVISION=$(git rev-parse HEAD) -t VOTRE_COMPTE/souverainrecrut-backend:1.0.0-$(git rev-parse --short HEAD) .
-docker image ls
-docker push VOTRE_COMPTE/souverainrecrut-backend:1.0.0-$(git rev-parse --short HEAD)
-```
-
-## 6. Provisionnement et déploiement — partie 4 (09/11/2026)
-
-**Résultat** : l'API tourne sur le VPS et communique avec PostgreSQL : **http://148.230.115.48:4000/v1** (`/ready` → `READY`, base `CONNECTED`). Test de bout en bout réussi : connexion admin, création/suppression d'un candidat, 401 sans token.
-
-**4.1 — Serveur** : VPS existant à la place de VMware (`root@148.230.115.48`). Il tourne sous **Debian 13 (trixie)**, pas Ubuntu, en amd64, 2 vCPU, 8 Go de RAM, avec accès SSH et Internet vérifiés. Il héberge **déjà d'autres services en production** (stack ondes-voxel avec Caddy sur 80/443, serveur de jeu). Choix retenus :
-- pas de snapshot (décision de l'utilisateur) ;
-- playbook non intrusif ;
-- Docker Debian (`docker.io`) conservé.
-
-**4.2 — Terraform** (`terraform/`) : sans ESXi/vCenter, le provider vSphere est inutilisable. Terraform gère donc les ressources réellement disponibles :
+**Terraform** (`terraform/`). Sans ESXi/vCenter, le provider vSphere est inutilisable. Terraform gère donc les ressources réellement disponibles autour du VPS :
 
 | Ressource | Rôle |
 |---|---|
-| `tls_private_key` | Paire de clés SSH dédiée au déploiement (GitLab) ; clé privée dans `terraform/.secrets/` (ignoré par git) |
-| `null_resource` + `remote-exec` | Vérification du serveur en lecture seule (OS, architecture, IP, Internet) ; échec si l'OS n'est pas supporté |
-| `local_file` | Génère l'inventaire et les variables Ansible : Terraform passe ensuite la main à Ansible |
+| `tls_private_key` | Paire de clés SSH dédiée au déploiement (clé privée hors dépôt, dans `.secrets/`) |
+| `null_resource` + `remote-exec` | Contrôle du serveur en lecture seule : OS, architecture, IP, accès Internet |
+| `local_file` | Génère `ansible/inventory.ini` et les variables Ansible |
 
-`terraform init`, `validate`, `plan` et `apply` : OK (connexion SSH via l'agent, car la clé admin est protégée par une passphrase).
+![terraform apply](docs/captures/terminal-terraform.png)
 
-**4.3 — Ansible** (`ansible/`) : `ansible-playbook -i inventory.ini playbook.yml -e image_tag=<tag>`
+**Ansible** (`ansible/playbook.yml`), `ansible-playbook -i inventory.ini playbook.yml` :
 
 | Étape | Détail |
 |---|---|
-| Système | `apt upgrade` (safe), dépendances ; `needrestart` en mode liste (aucun service redémarré) ; reboot signalé, jamais forcé |
-| Docker | Détection : s'il est déjà présent, il est conservé ; sinon installation de Docker CE + Compose depuis le dépôt officiel. Service activé, versions vérifiées |
-| Déploiement | Utilisateur `deploy` (groupe docker, clé Terraform), `/opt/souverainrecrut` (0750), secrets générés **sur le serveur** (`.env` 0600, jamais versionnés) |
-| Stack | API + PostgreSQL 16 dédié, réseau isolé, base non exposée ; service `migrate` (migrations Prisma) avant l'API ; compte admin créé une fois |
-| Pare-feu | ufw : port 4000 ouvert |
-| Vérifications | Conteneurs, `/v1/ready` depuis le serveur, `/v1/health` depuis l'extérieur |
+| Système | Mise à jour APT ; `needrestart` en mode liste (aucun service redémarré) ; redémarrage signalé, jamais forcé |
+| Docker | Docker et Compose existants conservés ; sinon, installation de Docker CE depuis le dépôt officiel. Service activé et vérifié |
+| Accès | Utilisateur `deploy` (groupe docker) avec la clé générée par Terraform |
+| Application | `/opt/souverainrecrut` (0750), fichiers de `deployment/`, secrets initiaux générés **sur le serveur** (0600), compte admin |
+| Réseau | ufw : port 4000 ouvert |
+| Contrôle | Conteneurs, `/v1/ready` depuis le serveur, `/v1/health` depuis l'extérieur |
 
-Premier passage : `ok=21 changed=10 failed=0`. Second passage : **`changed=0`** (idempotent). Les services existants du serveur sont intacts.
+Le playbook est **idempotent** : un second passage ne change rien (`changed=0`).
 
-**`deploy.sh`** (sur le serveur, utilisé par Ansible et GitLab) : `pull`, puis `up`, puis contrôle de santé. Tests réels : un tag inexistant ne change rien ; une image incompatible déclenche le **retour arrière automatique** vers le tag précédent.
+![ansible-playbook](docs/captures/terminal-ansible.png)
 
-**4.4 — GitLab** (`gitlab-deploy/.gitlab-ci.yml`, contenu du projet GitLab de déploiement) : jobs `check:config` (variables présentes, tag existant et en amd64 sur Docker Hub), `deploy:production` (SSH en `deploy`, token passé par stdin, `docker logout` à la fin) et `verify:api`. **Les 3 jobs ont été exécutés avec succès** contre le VPS, dans `alpine:3.20` comme sur un runner GitLab.
+---
 
-| Variable GitLab (Settings → CI/CD → Variables, toutes *Protected*) | Type | Valeur |
+## 7. Déploiement : Docker Compose et GitLab CI
+
+**`deployment/docker-compose.yml`**
+
+```mermaid
+flowchart LR
+    subgraph NET ["réseau souverainrecrut_backend"]
+        PG[(postgres<br/>16.15-alpine<br/>healthcheck pg_isready)]
+        MIG[migrate<br/>prisma migrate deploy<br/>exécution unique]
+        API[api<br/>image versionnée<br/>healthcheck /v1/health]
+    end
+    VOL[(volume<br/>souverainrecrut_pgdata)] --- PG
+    MIG -->|service_healthy| PG
+    API -->|service_completed_successfully| MIG
+    API -->|service_healthy| PG
+    USER([Client]) -->|:4000| API
+```
+
+| Exigence 5.2 | Mise en œuvre |
+|---|---|
+| Image versionnée | `${BACKEND_IMAGE}:${IMAGE_TAG}`, tag dans `release.env` écrit par `deploy.sh` |
+| Variables API et Prisma | `DATABASE_URL`, `JWT_SECRET`, `PORT`… depuis `.env` (modèle : `.env.example`) |
+| Persistance et réseau | Volume nommé `pgdata` ; réseau dédié ; PostgreSQL **non exposé** |
+| Redémarrage et santé | `restart: unless-stopped` ; healthchecks PostgreSQL et API ; rotation des logs |
+| Migrations maîtrisées | Service `migrate` exécuté avant chaque démarrage de l'API ; `migrate deploy` n'applique que les migrations versionnées (jamais de reset) ; **sauvegarde `pg_dump` automatique avant** |
+
+**`deployment/deploy.sh`** : sauvegarde → `pull` → `up` (migrations puis API) → contrôle de santé → historique. En cas d'échec, il revient automatiquement à la version précédente.
+
+**Pipeline GitLab** (`gitlab-deploy/.gitlab-ci.yml`)
+
+```mermaid
+flowchart LR
+    T[validate:tag<br/>format, existe, amd64] --> D
+    C[validate:compose<br/>compose config, scripts] --> D
+    D{{deploy:production<br/>APPROBATION MANUELLE}} --> VC[verify:containers<br/>healthy + bon tag]
+    D --> VA[verify:api<br/>endpoints]
+    R[rollback:production<br/>manuel]
+```
+
+| Exigence 5.3 | Mise en œuvre |
+|---|---|
+| Valider le tag | Format `<version>-<commit>`, présence sur Docker Hub, architecture amd64 |
+| Connexion SSH | Agent SSH + clé (variable *File*), hôte vérifié par `known_hosts` |
+| Transmettre fichiers et configuration | `scp` de `deployment/` et du `.env` généré depuis les variables protégées |
+| Récupérer l'image | `docker login` (token par stdin) puis `docker compose pull` |
+| Démarrer ou mettre à jour | `./deploy.sh <tag>` |
+| Vérifier | Conteneurs `healthy` sur le bon tag ; `/health`, `/ready`, `/info`, `/api-docs`, 401 sans token, 400 sur login invalide |
+| Approbation | Job `deploy:production` en `when: manual` : le pipeline reste bloqué jusqu'à validation |
+
+![Pipeline en attente d'approbation](docs/captures/gitlab-pipeline-approbation.png)
+
+![Pipeline après approbation, déploiement et vérifications](docs/captures/gitlab-pipeline-deploiement.png)
+
+![Job deploy:production](docs/captures/terminal-gitlab-deploy.png)
+
+---
+
+## 8. Vérification, rollback et données
+
+**Cheminement complet d'une modification** (exemple réel du commit `727aaad`) :
+
+```mermaid
+sequenceDiagram
+    participant Dev as Développeur
+    participant GH as GitHub (Dev)
+    participant J as Jenkins
+    participant H as Docker Hub
+    participant GL as GitLab CI
+    participant S as VPS
+    Dev->>GH: git push (727aaad)
+    GH->>J: build n°10
+    J->>J: 308 tests · Quality Gate OK · build amd64 · Trivy OK
+    J->>H: push 1.0.0-727aaad (label revision=727aaad0bb…)
+    Dev->>GL: Run pipeline IMAGE_TAG=1.0.0-727aaad
+    GL->>GL: validate:tag, validate:compose
+    Dev->>GL: approbation (▶ deploy:production)
+    GL->>S: scp deployment/ + .env, ./deploy.sh
+    S->>H: docker pull
+    S->>S: pg_dump → migrate → api healthy
+    GL->>S: verify:containers, verify:api
+```
+
+Sur le serveur, la version en service se retrouve depuis le conteneur lui-même : `docker inspect souverainrecrut-api-1` donnait `revision=727aaad0bb150b3c2fb76200c970e73a5d4061e7`. **Version en production à la remise : `1.0.0-eee63dd`**, déployée par le même pipeline GitLab (historique complet dans `/opt/souverainrecrut/release.history`).
+
+**Vérifications réalisées sur le serveur**
+
+| Vérification | Résultat |
+|---|---|
+| Endpoints principaux | `/health` UP, `/ready` READY + base CONNECTED, `/info`, Swagger, login admin, création et suppression de candidat, 401 sans token |
+| Communication API ↔ PostgreSQL | `/ready` exécute `SELECT 1` ; écriture et lecture via l'API |
+| Persistance | Donnée témoin conservée après `docker compose down` puis redémarrage |
+| Sauvegarde et restauration | Donnée supprimée, puis restaurée depuis la sauvegarde automatique |
+| Rollback | `1.0.0-6498839` → `1.0.0-727aaad` par le job GitLab ; donnée témoin intacte |
+| Retour automatique | Tag inexistant : aucun changement. Image incompatible : retour automatique à la version précédente |
+
+![Persistance](docs/captures/terminal-persistance.png)
+
+![Swagger UI en production](docs/captures/swagger.png)
+
+**Procédure de rollback** (trois niveaux)
+
+| Situation | Action | Données |
 |---|---|---|
-| `DOCKERHUB_USERNAME` | Variable | `martinbellot` |
-| `DOCKERHUB_TOKEN` | Variable, **Masked and hidden** | access token Docker Hub |
-| `DEPLOY_HOST` | Variable | `148.230.115.48` |
-| `DEPLOY_USER` | Variable | `deploy` |
-| `SSH_PRIVATE_KEY` | **File** | contenu de `terraform/.secrets/deploy_ed25519` |
-| `SSH_KNOWN_HOSTS` | **File** | `ssh-keyscan -t ed25519 148.230.115.48` |
-| `IMAGE_TAG` | Variable | ex. `1.0.0-727aaad` (surchargeable au lancement) |
+| Le déploiement échoue (image, migration, santé) | **Automatique** : `deploy.sh` remet la version précédente | inchangées |
+| Défaut fonctionnel constaté après un déploiement réussi | GitLab : job **`rollback:production`**, ou *Run pipeline* avec `IMAGE_TAG` = version précédente (liste dans `release.history` ou sur Docker Hub) | inchangées |
+| La migration de la nouvelle version a cassé le schéma ou les données | Rollback applicatif, **puis** `./restore.sh <sauvegarde> --yes` | données écrites après la sauvegarde **perdues** |
 
-**Défauts trouvés et corrigés pendant cette partie** :
-- **Image publiée en arm64** (Jenkins tourne sur un Mac Apple Silicon) alors que le VPS est en amd64 : l'API n'aurait pas démarré. Correction : build `linux/amd64` via **buildx** (ajouté à l'image Jenkins, binaire vérifié par SHA-256), paramètre `TARGET_PLATFORM`.
-- **YAML GitLab invalide** : un `echo "… : …"` était lu comme une clé YAML, et GitLab aurait rejeté le fichier. Détecté par la simulation, puis corrigé.
-- **Retour arrière inopérant** dans la première version de `deploy.sh` (`set -e` arrêtait le script avant le retour arrière), ce qui a causé environ 2 minutes d'arrêt de l'API pendant le test. Corrigé et revérifié.
+![Rollback par GitLab](docs/captures/gitlab-pipeline-rollback.png)
 
-**Points d'attention** :
-- **Redémarrage du VPS en attente** (noyau mis à jour) : à planifier, il coupera aussi les autres services.
-- Lors d'un déploiement d'une image défaillante, l'API est indisponible le temps du retour arrière (environ 1 min) : pas de déploiement sans coupure (blue/green).
-- Le mot de passe admin est dans `/opt/souverainrecrut/.env` (`ADMIN_PASSWORD`) sur le serveur.
-- Le groupe `docker` donne à `deploy` des droits équivalents à root sur le serveur : c'est le compromis classique pour un déploiement Docker par SSH.
+![Job rollback:production](docs/captures/terminal-gitlab-rollback.png)
+
+![Restauration de la base](docs/captures/terminal-restauration.png)
+
+**Migrations et réversibilité.** Un rollback applicatif ne défait pas une migration Prisma : l'ancienne version de l'API tourne alors sur le nouveau schéma. Règles retenues :
+- **Migrations additives (expand / contract)** : ajouter une colonne ou une table d'abord, compatible avec l'ancien code ; ne supprimer ou renommer que dans une version ultérieure, quand plus aucune version déployée n'en dépend. Le rollback reste alors sûr.
+- **Sauvegarde avant chaque déploiement** (`deploy.sh`, 7 conservées) : c'est le filet de sécurité quand une migration n'est pas réversible.
+- `migrate deploy` uniquement en production, jamais `migrate dev` ni `reset`.
+
+---
+
+## 9. Gestion des secrets
+
+| Secret | Stocké dans | Utilisé par |
+|---|---|---|
+| Token Docker Hub (publication) | Credential Jenkins (JCasC, depuis `ci/.env` non versionné) | étape Publish |
+| Token SonarQube | Credential Jenkins | analyse |
+| Token Docker Hub (pull) | Variable GitLab **protégée, masquée et cachée** | `deploy:production` |
+| Clé SSH de déploiement | État Terraform local + variable GitLab de type *File* | jobs SSH |
+| `POSTGRES_PASSWORD`, `JWT_SECRET` | Variables GitLab masquées et cachées → `.env` 0600 sur le serveur | stack |
+| Mot de passe admin de l'API | `admin.env` 0600 sur le serveur | exploitation |
+
+![Variables GitLab](docs/captures/terminal-gitlab-variables.png)
+
+**Contrôles effectués** : aucun motif de secret ni aucune valeur réelle dans les 13 commits de l'historique Git ; 0 occurrence des 4 secrets dans les journaux des jobs GitLab ; pas de `set -x` ; token transmis par stdin ; `.env` créé en 0600 puis supprimé du runner.
+
+---
+
+## 10. Conformité aux exigences
+
+| Exigence | Attendu | Preuves |
+|---|---|---|
+| **Reproductibilité** | Build, configuration et déploiement décrits et rejouables | `Jenkinsfile`, JCasC, Dockerfile figé par digest, Terraform, playbook idempotent (`changed=0`), `deployment/`, `.gitlab-ci.yml`, `capture.py` — § 4 à 7 |
+| **Qualité logicielle** | Tests exécutés, couverture et SonarQube consultables | 330 tests, 100 % de couverture, rapport HTML dans Jenkins, Quality Gate PASSED — § 3 |
+| **Sécurité** | Secrets protégés, image analysée par Trivy | Variables protégées, masquées et cachées, credentials Jenkins, historique et journaux vérifiés ; Trivy bloquant avec seuils documentés — § 5, § 9 |
+| **Traçabilité** | Tag explicite relié à une version du code | `<version>-<commit>`, labels OCI `revision`, version SonarQube = tag, `release.history` — § 5, § 8 |
+| **Déploiement** | Le serveur récupère l'image publiée, l'API démarre avec PostgreSQL | `docker pull` depuis Docker Hub (aucun build sur le serveur), migrations puis API `healthy` — § 7 |
+| **Continuité** | Rollback documenté | Trois niveaux de rollback testés + sauvegarde et restauration — § 8 |
+| **Documentation** | Choix, prérequis et procédures expliqués | Ce rapport, `README.md`, `gitlab-deploy/README.md`, commentaires des fichiers — § 13 |
+
+---
+
+## 11. Défauts détectés et corrigés
+
+Les tests et les déploiements réels ont révélé des défauts. Chacun a été corrigé, puis revérifié.
+
+| Origine | Défaut | Correction |
+|---|---|---|
+| Base de données | La migration ne correspondait pas au schéma : pas de suppression en cascade, pas d'unicité des candidatures | Migration corrective |
+| Sécurité API | Hash des mots de passe renvoyé par `/users` ; mot de passe enregistré **en clair** à la mise à jour | Sélection sans mot de passe ; hachage systématique |
+| Robustesse API | Erreurs 500 sur données invalides (Prisma, JSON, login, pagination) | Codes 400/404/409/413 et validation Zod |
+| Configuration | Démarrage possible sans `JWT_SECRET` ; port exposé ≠ port d'écoute | Arrêt au démarrage ; `PORT=4000` |
+| SonarQube | 13 code smells, 1 hotspot, nom de projet mal encodé | Corrigés |
+| Trivy | 26 vulnérabilités HIGH (dont `proxy-addr`, `npm` embarqué) | Mises à jour, `npm` retiré, exception datée |
+| Architecture | Image publiée en **arm64** (Jenkins sur Mac), alors que le serveur est en amd64 | Build `buildx --platform linux/amd64` + contrôle dans GitLab |
+| Déploiement | Retour arrière inopérant (`set -e`) ; échec après un `compose down` (variable manquante, base arrêtée pendant la sauvegarde) | Script corrigé et revérifié |
+| GitLab | YAML invalide (`: ` lu comme une clé) | Détecté par le lint, corrigé |
+| CI | Avertissement Jest en CI (13 workers sur 14 cœurs) | `--maxWorkers=2` |
+
+> Deux de ces tests ont coupé l'API SouverainRecrut pendant quelques minutes, ce qui a permis de corriger `deploy.sh`. Les autres services du serveur n'ont jamais été touchés.
+
+---
+
+## 12. Limites et pistes
+
+| Limite | Piste |
+|---|---|
+| Jenkins et SonarQube tournent sur le poste de développement | Les héberger sur un serveur CI dédié, avec un webhook GitHub à la place de la scrutation |
+| SonarQube 10.7 n'est plus maintenu et utilise sa base embarquée (réservée à l'évaluation) | Version LTA courante avec une base PostgreSQL dédiée |
+| Coupure d'environ 30 s à 1 min pendant un déploiement ou un rollback | Déploiement blue/green derrière un reverse proxy |
+| API en HTTP sur le port 4000 | HTTPS via un reverse proxy et un nom de domaine |
+| `deploy` est membre du groupe `docker`, ce qui équivaut à des droits root | Docker rootless, ou commande SSH forcée vers `deploy.sh` |
+| Exception Trivy `deepmerge-ts` | Migrer vers Prisma 7 |
+| Sauvegardes conservées sur le serveur lui-même | Les copier hors du serveur (stockage objet) |
+
+---
+
+## 13. Procédures de référence
+
+**Prérequis** : Docker, Node 22, Terraform ≥ 1.6, Ansible ≥ 2.16, un accès SSH root au serveur (agent SSH), des comptes GitHub, GitLab (vérifié) et Docker Hub.
+
+| Objectif | Commandes |
+|---|---|
+| Lancer Jenkins + SonarQube | `cp ci/.env.example ci/.env` (renseigner) · `docker compose -f docker-compose.ci.yml up -d --build` · `SONAR_HOST_URL=… SONAR_ADMIN_TOKEN=… ci/sonar/setup-quality-gate.sh` |
+| Tester en local | `cd backend && npm ci && npm test` · E2E : `npm run test:db:up && npm run test:e2e` |
+| Provisionner | `cd terraform && terraform init && terraform plan && terraform apply` |
+| Configurer le serveur | `cd ansible && ansible-playbook -i inventory.ini playbook.yml -e image_tag=<tag>` |
+| Préparer GitLab | `./gitlab-deploy/setup-variables.sh <tag>` · `./gitlab-deploy/sync.sh` |
+| Déployer | GitLab → *Run pipeline* (`IMAGE_TAG=<tag>`) → ▶ `deploy:production` |
+| Revenir en arrière | GitLab → ▶ `rollback:production` (ou *Run pipeline* avec l'ancien tag) |
+| Restaurer la base | Sur le serveur : `./restore.sh` (liste) puis `./restore.sh backups/<fichier>.dump --yes` |
+| Observer | `docker compose --env-file .env --env-file release.env ps` · `… logs -f api` |
+| Refaire les captures | voir l'en-tête de `docs/captures/capture.py` |

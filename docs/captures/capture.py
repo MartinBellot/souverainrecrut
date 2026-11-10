@@ -68,6 +68,7 @@ def sonar_clean(page):
     """Ferme les bannières, le tour guidé et les popups promotionnels."""
     for selector in (
         "button:has-text('Not now')",
+        "button:has-text('Got it')",
         "button:has-text('Dismiss')",
         "[role=alert] button[aria-label]",
         "button[aria-label='Dismiss']",
