@@ -134,28 +134,42 @@
         mode: "0750"
       tags: [app]
 
-    - name: Générer les secrets du serveur (une seule fois)
+    # .env : généré une seule fois (installation initiale). Ensuite, c'est le pipeline
+    # GitLab qui le régénère à chaque déploiement depuis ses variables protégées.
+    - name: Générer la configuration et les secrets initiaux (.env, admin.env)
       ansible.builtin.template:
-        src: env.j2
-        dest: "{{ deploy_dir }}/.env"
+        src: "{{ item }}.j2"
+        dest: "{{ deploy_dir }}/{{ item }}"
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
         mode: "0600"
         force: false
+      loop: [.env, admin.env]
       no_log: true
       tags: [app]
 
-    - name: Installer la stack Compose, le script de déploiement et l'amorçage admin
-      ansible.builtin.template:
-        src: "{{ item.src }}"
-        dest: "{{ deploy_dir }}/{{ item.dest }}"
+    # Source unique : le dossier deployment/ du dépôt (le même que celui transmis par GitLab).
+    - name: Installer les fichiers de déploiement (deployment/)
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../deployment/{{ item.name }}"
+        dest: "{{ deploy_dir }}/{{ item.name }}"
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
         mode: "{{ item.mode }}"
       loop:
-        - { src: docker-compose.yml.j2, dest: docker-compose.yml, mode: "0640" }
-        - { src: deploy.sh.j2, dest: deploy.sh, mode: "0750" }
-        - { src: bootstrap-admin.js.j2, dest: bootstrap-admin.js, mode: "0644" }
+        - { name: docker-compose.yml, mode: "0640" }
+        - { name: .env.example, mode: "0640" }
+        - { name: deploy.sh, mode: "0750" }
+        - { name: restore.sh, mode: "0750" }
+      tags: [app]
+
+    - name: Installer le script d'amorçage du compte administrateur
+      ansible.builtin.template:
+        src: bootstrap-admin.js.j2
+        dest: "{{ deploy_dir }}/bootstrap-admin.js"
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0644"
       tags: [app]
 
     # ---------------------------------------------------------------- Pare-feu
@@ -189,7 +203,7 @@
     - name: Créer le compte administrateur initial
       ansible.builtin.shell: |
         set -eu
-        set -a; . ./.env; set +a
+        set -a; . ./.env; . ./admin.env; set +a
         docker compose --env-file .env --env-file release.env run --rm --no-deps \
           -e ADMIN_EMAIL -e ADMIN_PASSWORD \
           -v "{{ deploy_dir }}/bootstrap-admin.js:/app/bootstrap-admin.js:ro" \
@@ -234,6 +248,6 @@
           - "{{ docker_versions.results | map(attribute='stdout') | list }}"
           - "Stack : {{ stack_status.stdout_lines }}"
           - "API : http://{{ ansible_host }}:{{ api_port }}/v1 — base {{ ready_local.json.data.database }}"
-          - "Admin : {{ admin_email }} (mot de passe dans {{ deploy_dir }}/.env, ADMIN_PASSWORD)"
+          - "Admin : {{ admin_email }} (mot de passe dans {{ deploy_dir }}/admin.env)"
           - "Redémarrage du serveur nécessaire : {{ 'OUI (à planifier)' if reboot_required.stat.exists else 'non' }}"
       tags: [verify]
