@@ -425,3 +425,4 @@ Les tests et les déploiements réels ont révélé des défauts. Chacun a été
 | Restaurer la base | Sur le serveur : `./restore.sh` (liste) puis `./restore.sh backups/<fichier>.dump --yes` |
 | Observer | `docker compose --env-file .env --env-file release.env ps` · `… logs -f api` |
 | Refaire les captures | voir l'en-tête de `docs/captures/capture.py` |
+| Régénérer `RAPPORT.pdf` | `./docs/pdf/build.sh` (Markdown → HTML → Chromium, schémas Mermaid en PNG) |
