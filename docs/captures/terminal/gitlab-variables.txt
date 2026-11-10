@@ -1,0 +1,12 @@
+# Variables CI/CD du projet GitLab (API) — aucune valeur secrète n'est lisible
+$ GET /projects/:id/variables
+  CLÉ                  TYPE     PROTÉGÉE   MASQUAGE
+  DOCKERHUB_USERNAME   Variable oui        -
+  DOCKERHUB_TOKEN      Variable oui        masquée + cachée
+  DEPLOY_HOST          Variable oui        -
+  DEPLOY_USER          Variable oui        -
+  SSH_PRIVATE_KEY      File     oui        -
+  SSH_KNOWN_HOSTS      File     oui        -
+  POSTGRES_PASSWORD    Variable oui        masquée + cachée
+  JWT_SECRET           Variable oui        masquée + cachée
+  IMAGE_TAG            Variable oui        -

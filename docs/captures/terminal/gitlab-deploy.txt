@@ -1,0 +1,15 @@
+# GitLab — job deploy:production (après approbation manuelle)
+$ umask 077
+$ scp -q deployment/docker-compose.yml deployment/.env.example deployment/deploy.sh deployment/restore.sh "${TARGET}:${DEPLOY_DIR}/"
+$ scp -q deploy.env "${TARGET}:${DEPLOY_DIR}/.env"
+$ ssh "$TARGET" "chmod 600 ${DEPLOY_DIR}/.env && chmod 750 ${DEPLOY_DIR}/deploy.sh ${DEPLOY_DIR}/restore.sh"
+$ printf "$DOCKERHUB_TOKEN" | ssh $TARGET "docker login --password-stdin"
+$ ssh "$TARGET" "cd ${DEPLOY_DIR} && ./deploy.sh '${IMAGE_TAG}'"
+▶ Déploiement de martinbellot/souverainrecrut-backend:1.0.0-6498839 (actuel : 1.0.0-727aaad)
+💾 Sauvegarde : backups/20261110T133905Z_1.0.0-727aaad.dump (12K)
+✅ API prête : martinbellot/souverainrecrut-backend:1.0.0-6498839
+SERVICE    IMAGE                                                STATUS
+api        martinbellot/souverainrecrut-backend:1.0.0-6498839   Up 2 seconds (health: starting)
+postgres   postgres:16.15-alpine3.24                            Up 11 minutes (healthy)
+$ ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "docker logout" >/dev/null 2>&1 || true
+Job succeeded

@@ -1,0 +1,12 @@
+# trivy image — synthèse du rapport archivé par Jenkins (image 1.0.0-727aaad)
+$ trivy image --scanners vuln,secret souverainrecrut-backend:1.0.0-727aaad
+  CIBLE                              CRIT.  HIGH  MED.   LOW
+  Paquets système (Alpine 3.24)         0     0     1     0
+  Dépendances Node.js (node_modules)     0     1     4     0
+  TOTAL                                  0     1     5     0
+  Secrets détectés dans l'image : 0
+
+$ trivy image --severity HIGH,CRITICAL --ignore-unfixed --ignorefile .trivyignore.yaml --exit-code 1
+  HIGH/CRITICAL corrigeables : deepmerge-ts@7.1.5 CVE-2026-40345
+  → CVE-2026-40345 couverte par l'exception justifiée (expire le 2027-02-09)
+  → 0 vulnérabilité bloquante : exit 0, publication autorisée

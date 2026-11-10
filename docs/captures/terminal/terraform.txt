@@ -1,0 +1,12 @@
+# terraform apply — vérification du serveur et génération de l'inventaire Ansible
+$ terraform apply
+  OS          : Debian GNU/Linux 13 (trixie)
+  Architecture: amd64
+  IP          : 148.230.115.48
+  Internet    : OK
+Apply complete! Resources: 1 added, 0 changed, 1 destroyed.
+ansible_command = "cd ansible && ansible-playbook -i inventory.ini playbook.yml"
+api_url = "http://148.230.115.48:4000/v1"
+deploy_private_key_path = "./terraform/.secrets/deploy_ed25519"
+deploy_user = "deploy"
+server_ip = "148.230.115.48"

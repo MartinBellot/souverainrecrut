@@ -1,0 +1,9 @@
+# Tags publiés sur Docker Hub (API hub.docker.com)
+$ GET /v2/repositories/martinbellot/souverainrecrut-backend/tags
+  TAG              ARCH     PUBLIÉ (UTC)        DIGEST
+  dev              amd64    2026-11-10 13:38    sha256:80756fbd5f7d
+  1.0.0-ed80d8e    amd64    2026-11-10 13:38    sha256:80756fbd5f7d
+  1.0.0-fe9c95f    amd64    2026-11-10 13:04    sha256:5cd09241bbdc
+  1.0.0-6498839    amd64    2026-11-09 13:57    sha256:a037a781b2b7
+  1.0.0-727aaad    amd64    2026-11-09 13:47    sha256:68d6aea0d64a
+  1.0.0-e34613f    arm64    2026-11-09 11:24    sha256:828027aaf333

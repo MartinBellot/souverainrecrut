@@ -1,0 +1,20 @@
+# Persistance PostgreSQL — destruction et recréation de la stack (volume conservé)
+$ curl -X POST /v1/candidates   # donnée témoin
+→ candidat créé : cmwaq427u0000lh01a8pqn1jo
+
+$ docker compose down
+ Container souverainrecrut-api-1       Removed
+ Container souverainrecrut-migrate-1   Removed
+ Container souverainrecrut-postgres-1  Removed
+ Network souverainrecrut_backend       Removed
+
+$ docker volume ls --filter name=souverainrecrut
+souverainrecrut_pgdata
+
+$ ./deploy.sh 1.0.0-727aaad
+▶ Déploiement de martinbellot/souverainrecrut-backend:1.0.0-727aaad (actuel : 1.0.0-727aaad)
+💾 Sauvegarde : backups/20261110T132813Z_1.0.0-727aaad.dump (12K)
+✅ API prête : martinbellot/souverainrecrut-backend:1.0.0-727aaad
+
+$ curl /v1/candidates/cmwaq427u0000lh01a8pqn1jo
+→ témoin toujours présent : Témoin Persistance <temoin-persistance@example.com>

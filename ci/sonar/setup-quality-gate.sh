@@ -21,7 +21,7 @@ api() { curl -sS --fail-with-body -u "${SONAR_ADMIN_TOKEN}:" -X POST "${SONAR_HO
 
 echo "▶ Projet ${PROJECT_KEY}"
 api projects/create --data-urlencode "project=${PROJECT_KEY}" \
-  --data-urlencode "name=SouverainRecrut — Backend" >/dev/null || true
+  --data-urlencode "name=SouverainRecrut - Backend" >/dev/null || true
 
 echo "▶ Quality Gate ${GATE} (recréé à l'identique)"
 api qualitygates/destroy --data-urlencode "name=${GATE}" >/dev/null 2>&1 || true

@@ -1,0 +1,10 @@
+# GitLab — job rollback:production (scénario maîtrisé)
+$ ssh $TARGET "cd /opt/souverainrecrut && ./deploy.sh --rollback"
+↩ Rollback demandé : 1.0.0-6498839 → 1.0.0-727aaad
+▶ Déploiement de martinbellot/souverainrecrut-backend:1.0.0-727aaad (actuel : 1.0.0-6498839)
+💾 Sauvegarde : backups/20261110T134154Z_1.0.0-6498839.dump (12K)
+✅ API prête : martinbellot/souverainrecrut-backend:1.0.0-727aaad
+SERVICE    IMAGE                                                STATUS
+api        martinbellot/souverainrecrut-backend:1.0.0-727aaad   Up 2 seconds (health: starting)
+postgres   postgres:16.15-alpine3.24                            Up 14 minutes (healthy)
+Job succeeded

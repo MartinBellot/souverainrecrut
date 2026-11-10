@@ -1,0 +1,13 @@
+# npm run test:ci — tests unitaires et d'intégration avec couverture
+$ npm run test:ci
+Statements   : 100% ( 562/562 )
+Branches     : 100% ( 60/60 )
+Functions    : 100% ( 107/107 )
+Lines        : 100% ( 557/557 )
+Test Suites: 45 passed, 45 total
+Tests:       308 passed, 308 total
+Time:        7.33 s
+
+$ npm run test:e2e   # API réelle + PostgreSQL
+Test Suites: 2 passed, 2 total
+Tests:       22 passed, 22 total

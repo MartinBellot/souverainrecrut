@@ -1,0 +1,30 @@
+# ansible-playbook — configuration idempotente du serveur (2e passage)
+$ ansible-playbook -i inventory.ini playbook.yml
+
+  ok        Vérifier que le système est supporté
+  ok        Mettre à jour le cache et les paquets du système
+  ok        Installer les dépendances de base
+  ok        Vérifier si un redémarrage est nécessaire
+  ok        Détecter une installation Docker existante
+  skipping  Créer le répertoire des clés APT
+  skipping  Télécharger la clé GPG de Docker
+  skipping  Ajouter le dépôt APT de Docker
+  skipping  Installer Docker Engine et le plugin Compose
+  ok        Activer et démarrer le service Docker
+  ok        Vérifier Docker Engine et le plugin Compose
+  ok        Créer l'utilisateur de déploiement (membre du groupe docker)
+  ok        Autoriser la clé SSH de déploiement (générée par Terraform)
+  ok        Créer le répertoire de déploiement
+  ok        Générer la configuration et les secrets initiaux (.env, admin.env)
+  ok        Installer les fichiers de déploiement (deployment/)
+  ok        Installer le script d'amorçage du compte administrateur
+  ok        Ouvrir le port de l'API dans le pare-feu
+  ok        Lire le tag actuellement déployé
+  skipping  Déployer l'image Backend (premier déploiement ou tag imposé)
+  ok        Créer le compte administrateur initial
+  ok        Vérifier les conteneurs de la stack
+  ok        Vérifier l'API et sa connexion à PostgreSQL (depuis le serveur)
+  ok        Vérifier l'accès public à l'API (depuis le poste Ansible)
+
+PLAY RECAP
+  souverainrecrut-vps : ok=21 changed=0 unreachable=0 failed=0 skipped=5 rescued=0 ignored=0

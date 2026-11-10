@@ -1,0 +1,16 @@
+# Restauration PostgreSQL depuis la sauvegarde automatique de deploy.sh
+$ curl -X DELETE /v1/candidates/<témoin>   # perte de donnée simulée
+→ HTTP 200
+→ GET du témoin : HTTP 404 (supprimé)
+
+$ ./restore.sh
+Sauvegardes disponibles (la plus récente en premier) :
+backups/20261110T132813Z_1.0.0-727aaad.dump
+
+$ ./restore.sh backups/20261110T132813Z_1.0.0-727aaad.dump --yes
+⏸  Arrêt de l'API
+♻️  Restauration de backups/20261110T132813Z_1.0.0-727aaad.dump
+▶ Redémarrage de l'API
+✅ Base restaurée depuis backups/20261110T132813Z_1.0.0-727aaad.dump, API prête.
+
+→ témoin restauré : Témoin Persistance <temoin-persistance@example.com>
