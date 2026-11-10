@@ -14,6 +14,8 @@ cd "$(dirname "$0")"
 
 [ -f .env ] || { echo "❌ .env absent (cf. .env.example)"; exit 1; }
 set -a; . ./.env; set +a
+# Valeurs par défaut identiques à docker-compose.yml (.env minimal ou ancien format).
+BACKEND_IMAGE="${BACKEND_IMAGE:-martinbellot/souverainrecrut-backend}"
 API_PORT="${API_PORT:-4000}"
 BACKUP_KEEP="${BACKUP_KEEP:-7}"
 
@@ -35,6 +37,8 @@ wait_ready() {
 
 backup_database() {
   mkdir -p backups
+  # La base doit tourner pour être sauvegardée (ex. après un "docker compose down").
+  compose up -d --wait postgres >/dev/null 2>&1 || { echo "❌ PostgreSQL ne démarre pas."; exit 1; }
   file="backups/$(date -u +%Y%m%dT%H%M%SZ)_${1}.dump"
   if compose exec -T postgres pg_dump -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -Fc > "${file}"; then
     echo "💾 Sauvegarde : ${file} ($(du -h "${file}" | cut -f1))"
