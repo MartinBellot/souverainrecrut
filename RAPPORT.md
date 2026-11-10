@@ -47,40 +47,35 @@ Une modification du Backend poussée sur `Dev` est **testée, analysée, constru
 ## 2. Architecture
 
 ```mermaid
-flowchart LR
-    DEV([Développeur]) -->|git push Dev| GH[(GitHub<br/>code + CI + IaC)]
+flowchart TB
+    DEV([Développeur]) -->|git push Dev| GH[(GitHub<br/>code · CI · IaC · deployment/)]
+    GH -->|scrutation| CI
 
-    subgraph CI ["Intégration continue — Jenkins (Docker)"]
-        direction TB
-        J1[Checkout Dev] --> J2[npm ci + Prisma] --> J3[Tests + couverture]
-        J3 --> J4[Analyse SonarQube] --> J5{Quality Gate}
-        J5 -->|PASSED| J6[Build image<br/>linux/amd64] --> J7{Trivy}
-        J7 -->|0 bloquante| J8[Publication]
+    subgraph CI ["① Intégration continue — Jenkins"]
+        direction LR
+        J1[Checkout<br/>Dev] --> J2[npm ci<br/>Prisma] --> J3[Tests<br/>couverture] --> J4[Analyse<br/>SonarQube] --> J5{Quality<br/>Gate} -->|PASSED| J6[Build<br/>linux/amd64] --> J7{Trivy} -->|OK| J8[Publication]
     end
 
-    GH -->|scrutation| J1
-    J4 <--> SQ[(SonarQube)]
-    J8 -->|1.0.0-commit| HUB[(Docker Hub)]
+    CI -->|image 1.0.0-commit| HUB[(Docker Hub)]
+    GH -.->|sync.sh : deployment/| CD
 
-    subgraph CD ["Déploiement — GitLab CI"]
-        direction TB
-        G1[Validation tag + Compose] --> G2{{Approbation<br/>manuelle}} --> G3[Déploiement SSH] --> G4[Vérifications]
-        G5[Rollback manuel]
+    subgraph CD ["② Déploiement — GitLab CI"]
+        direction LR
+        G1[Validation<br/>tag + Compose] --> G2{{Approbation<br/>manuelle}} --> G3[Déploiement<br/>SSH] --> G4[Vérifications]
+        G5[Rollback<br/>manuel]
     end
 
-    GH -.->|sync.sh : deployment/| G1
+    CD -->|scp + deploy.sh| VPS
     HUB -->|docker pull| VPS
-    G3 --> VPS
-    G5 --> VPS
 
-    subgraph VPS ["VPS Debian 13 — /opt/souverainrecrut"]
-        direction TB
-        M[migrate<br/>Prisma] --> API[API Express :4000]
-        API --> PG[(PostgreSQL 16<br/>volume pgdata)]
-        M --> PG
+    subgraph VPS ["③ VPS Debian 13 — /opt/souverainrecrut"]
+        direction LR
+        M[migrate<br/>Prisma] --> PG[(PostgreSQL 16<br/>volume pgdata)]
+        API[API Express<br/>:4000] --> PG
     end
 
-    TF[Terraform] -->|clé SSH, contrôle, inventaire| ANS[Ansible] -->|Docker, utilisateur, stack| VPS
+    TF[Terraform] -->|clé SSH · contrôle · inventaire| ANS[Ansible]
+    ANS -->|Docker · utilisateur · stack| VPS
 ```
 
 | Outil | Rôle | Où il tourne |
